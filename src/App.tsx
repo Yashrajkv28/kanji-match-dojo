@@ -1,10 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import {
+  ArrowLeft,
   Award,
+  BookOpen,
   Clock3,
   Languages,
+  Layers3,
   Moon,
+  Play,
   RotateCcw,
   Sparkles,
   Sun,
@@ -19,7 +23,16 @@ interface KanjiData {
   reading: string;
 }
 
-const KANJI_LIST: KanjiData[] = [
+interface QuestionSet {
+  id: string;
+  title: string;
+  subtitle: string;
+  level: string;
+  description: string;
+  items: KanjiData[];
+}
+
+const BEGINNER_KANJI: KanjiData[] = [
   { id: 1, kanji: '一', meaning: 'One', reading: 'ichi' },
   { id: 2, kanji: '二', meaning: 'Two', reading: 'ni' },
   { id: 3, kanji: '三', meaning: 'Three', reading: 'san' },
@@ -44,9 +57,21 @@ const KANJI_LIST: KanjiData[] = [
   { id: 22, kanji: '雨', meaning: 'Rain', reading: 'ame' },
 ];
 
-const BEST_TIME_KEY = 'kanji-matcher-best-time';
-const THEME_KEY = 'kanji-matcher-theme';
+const QUESTION_SETS: QuestionSet[] = [
+  {
+    id: 'beginner-essentials',
+    title: 'Beginner Essentials',
+    subtitle: '22 core kanji',
+    level: 'Starter',
+    description: 'Numbers, nature, directions, and everyday nouns for first-pass recognition drills.',
+    items: BEGINNER_KANJI,
+  },
+];
 
+const THEME_KEY = 'kanji-matcher-theme';
+const SELECTED_SET_KEY = 'kanji-matcher-selected-set';
+
+type AppView = 'dashboard' | 'game';
 type Theme = 'light' | 'dark';
 
 function shuffle<T>(array: T[]): T[] {
@@ -73,7 +98,19 @@ function getInitialTheme(): Theme {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+function getInitialSetId(): string {
+  const storedSetId = window.localStorage.getItem(SELECTED_SET_KEY);
+  const hasStoredSet = QUESTION_SETS.some((set) => set.id === storedSetId);
+  return hasStoredSet && storedSetId ? storedSetId : QUESTION_SETS[0].id;
+}
+
+function getBestTimeKey(setId: string): string {
+  return `kanji-matcher-best-time:${setId}`;
+}
+
 export default function App() {
+  const [appView, setAppView] = useState<AppView>('dashboard');
+  const [selectedSetId, setSelectedSetId] = useState(getInitialSetId);
   const [shuffledKanji, setShuffledKanji] = useState<KanjiData[]>([]);
   const [shuffledMeanings, setShuffledMeanings] = useState<KanjiData[]>([]);
   const [selectedKanjiId, setSelectedKanjiId] = useState<number | null>(null);
@@ -87,34 +124,43 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
 
   const isDark = theme === 'dark';
-  const isComplete = matchedIds.size === KANJI_LIST.length;
+  const selectedSet = useMemo(
+    () => QUESTION_SETS.find((set) => set.id === selectedSetId) ?? QUESTION_SETS[0],
+    [selectedSetId],
+  );
+  const totalQuestions = selectedSet.items.length;
+  const isComplete = matchedIds.size === totalQuestions;
   const attempts = matchedIds.size + mistakes;
   const accuracy = attempts === 0 ? 100 : Math.round((matchedIds.size / attempts) * 100);
-  const remaining = KANJI_LIST.length - matchedIds.size;
+  const remaining = totalQuestions - matchedIds.size;
 
   const selectedKanji = useMemo(
-    () => KANJI_LIST.find((item) => item.id === selectedKanjiId),
-    [selectedKanjiId],
+    () => selectedSet.items.find((item) => item.id === selectedKanjiId),
+    [selectedKanjiId, selectedSet.items],
   );
 
-  const initGame = useCallback(() => {
-    setShuffledKanji(shuffle(KANJI_LIST));
-    setShuffledMeanings(shuffle(KANJI_LIST));
+  const initGame = useCallback((questionSet: QuestionSet = selectedSet) => {
+    setShuffledKanji(shuffle(questionSet.items));
+    setShuffledMeanings(shuffle(questionSet.items));
     setSelectedKanjiId(null);
     setSelectedMeaningId(null);
     setMatchedIds(new Set());
     setIsError(false);
     setMistakes(0);
     setElapsedSeconds(0);
-  }, []);
+  }, [selectedSet]);
 
   useEffect(() => {
-    initGame();
-  }, [initGame]);
+    initGame(selectedSet);
+  }, [initGame, selectedSet]);
 
   useEffect(() => {
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SELECTED_SET_KEY, selectedSetId);
+  }, [selectedSetId]);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => {
@@ -125,17 +171,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const storedBestTime = window.localStorage.getItem(BEST_TIME_KEY);
+    const storedBestTime = window.localStorage.getItem(getBestTimeKey(selectedSet.id));
     if (storedBestTime !== null) {
       const parsedBestTime = Number(storedBestTime);
-      if (Number.isFinite(parsedBestTime)) {
-        setBestTime(parsedBestTime);
-      }
+      setBestTime(Number.isFinite(parsedBestTime) ? parsedBestTime : null);
+      return;
     }
-  }, []);
+
+    setBestTime(null);
+  }, [selectedSet.id]);
 
   useEffect(() => {
-    if (isComplete) {
+    if (appView !== 'game' || isComplete) {
       return;
     }
 
@@ -144,10 +191,10 @@ export default function App() {
     }, 1000);
 
     return () => window.clearInterval(timerId);
-  }, [isComplete]);
+  }, [appView, isComplete]);
 
   useEffect(() => {
-    if (!isComplete) {
+    if (!isComplete || appView !== 'game') {
       return;
     }
 
@@ -156,10 +203,10 @@ export default function App() {
         return previousBestTime;
       }
 
-      window.localStorage.setItem(BEST_TIME_KEY, String(elapsedSeconds));
+      window.localStorage.setItem(getBestTimeKey(selectedSet.id), String(elapsedSeconds));
       return elapsedSeconds;
     });
-  }, [elapsedSeconds, isComplete]);
+  }, [appView, elapsedSeconds, isComplete, selectedSet.id]);
 
   const finishAttempt = useCallback((kanjiId: number, meaningId: number) => {
     if (kanjiId === meaningId) {
@@ -214,6 +261,18 @@ export default function App() {
     setSelectedMeaningId(id);
   };
 
+  const handleSelectSet = (setId: string) => {
+    setSelectedSetId(setId);
+    setAppView('dashboard');
+  };
+
+  const handleStartSet = (setId = selectedSet.id) => {
+    const questionSet = QUESTION_SETS.find((set) => set.id === setId) ?? QUESTION_SETS[0];
+    setSelectedSetId(questionSet.id);
+    initGame(questionSet);
+    setAppView('game');
+  };
+
   const toggleTheme = () => {
     setTheme((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'));
   };
@@ -222,152 +281,371 @@ export default function App() {
     <div className={isDark ? 'min-h-screen bg-[#12110f] text-stone-100' : 'min-h-screen bg-[#f6f4ef] text-stone-900'}>
       {showSplash && <SplashScreen isDark={isDark} />}
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
-        <header
-          className={`flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between ${
-            isDark ? 'border-stone-700' : 'border-stone-300/80'
+        <AppHeader
+          appView={appView}
+          isDark={isDark}
+          onBackToDashboard={() => setAppView('dashboard')}
+          onToggleTheme={toggleTheme}
+          selectedSet={selectedSet}
+          stats={{
+            accuracy,
+            elapsedSeconds,
+            matched: matchedIds.size,
+            mistakes,
+            total: totalQuestions,
+          }}
+        />
+
+        {appView === 'dashboard' ? (
+          <Dashboard
+            bestTime={bestTime}
+            isDark={isDark}
+            onSelectSet={handleSelectSet}
+            onStartSet={handleStartSet}
+            questionSets={QUESTION_SETS}
+            selectedSetId={selectedSet.id}
+          />
+        ) : (
+          <GameBoard
+            bestTime={bestTime}
+            elapsedSeconds={elapsedSeconds}
+            isComplete={isComplete}
+            isDark={isDark}
+            isError={isError}
+            matchedIds={matchedIds}
+            mistakes={mistakes}
+            onKanjiSelect={handleKanjiClick}
+            onMeaningSelect={handleMeaningClick}
+            onReset={() => initGame(selectedSet)}
+            remaining={remaining}
+            selectedKanji={selectedKanji}
+            selectedKanjiId={selectedKanjiId}
+            selectedMeaningId={selectedMeaningId}
+            selectedSet={selectedSet}
+            shuffledKanji={shuffledKanji}
+            shuffledMeanings={shuffledMeanings}
+          />
+        )}
+      </main>
+    </div>
+  );
+}
+
+interface AppHeaderProps {
+  appView: AppView;
+  isDark: boolean;
+  onBackToDashboard: () => void;
+  onToggleTheme: () => void;
+  selectedSet: QuestionSet;
+  stats: {
+    accuracy: number;
+    elapsedSeconds: number;
+    matched: number;
+    mistakes: number;
+    total: number;
+  };
+}
+
+function AppHeader({ appView, isDark, onBackToDashboard, onToggleTheme, selectedSet, stats }: AppHeaderProps) {
+  return (
+    <header
+      className={`flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between ${
+        isDark ? 'border-stone-700' : 'border-stone-300/80'
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-lg text-white shadow-sm ${isDark ? 'bg-amber-600' : 'bg-red-700'}`}>
+          <Languages size={26} />
+        </div>
+        <div>
+          <p className={`text-sm font-semibold uppercase tracking-[0.18em] ${isDark ? 'text-amber-400' : 'text-red-700'}`}>
+            {appView === 'dashboard' ? 'Question dashboard' : selectedSet.subtitle}
+          </p>
+          <h1 className={`text-3xl font-bold tracking-normal sm:text-4xl ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+            Kanji Match Dojo
+          </h1>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        {appView === 'game' && (
+          <button
+            className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+              isDark
+                ? 'border-stone-600 bg-stone-900 text-stone-100 hover:bg-stone-800 focus:ring-amber-500 focus:ring-offset-[#12110f]'
+                : 'border-stone-300 bg-white text-stone-900 hover:bg-stone-100 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
+            }`}
+            onClick={onBackToDashboard}
+            type="button"
+          >
+            <ArrowLeft size={17} />
+            Dashboard
+          </button>
+        )}
+        <button
+          aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
+          className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+            isDark
+              ? 'border-stone-600 bg-stone-900 text-amber-200 hover:bg-stone-800 focus:ring-amber-500 focus:ring-offset-[#12110f]'
+              : 'border-stone-300 bg-white text-stone-900 hover:bg-stone-100 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
           }`}
+          onClick={onToggleTheme}
+          type="button"
         >
-          <div className="flex items-center gap-3">
-            <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-lg text-white shadow-sm ${isDark ? 'bg-amber-600' : 'bg-red-700'}`}>
-              <Languages size={26} />
-            </div>
-            <div>
-              <p className={`text-sm font-semibold uppercase tracking-[0.18em] ${isDark ? 'text-amber-400' : 'text-red-700'}`}>
-                22 essential characters
-              </p>
-              <h1 className={`text-3xl font-bold tracking-normal sm:text-4xl ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-                Kanji Match Dojo
-              </h1>
-            </div>
+          {isDark ? <Sun size={17} /> : <Moon size={17} />}
+          {isDark ? 'Light' : 'Dark'}
+        </button>
+        {appView === 'game' && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[34rem]">
+            <StatCard icon={<Target size={18} />} isDark={isDark} label="Matched" value={`${stats.matched}/${stats.total}`} />
+            <StatCard icon={<XCircle size={18} />} isDark={isDark} label="Misses" value={String(stats.mistakes)} />
+            <StatCard icon={<Sparkles size={18} />} isDark={isDark} label="Accuracy" value={`${stats.accuracy}%`} />
+            <StatCard icon={<Clock3 size={18} />} isDark={isDark} label="Time" value={formatTime(stats.elapsedSeconds)} />
           </div>
+        )}
+      </div>
+    </header>
+  );
+}
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <button
-              aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
-              className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-                isDark
-                  ? 'border-stone-600 bg-stone-900 text-amber-200 hover:bg-stone-800 focus:ring-amber-500 focus:ring-offset-[#12110f]'
-                  : 'border-stone-300 bg-white text-stone-900 hover:bg-stone-100 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
-              }`}
-              onClick={toggleTheme}
-              type="button"
-            >
-              {isDark ? <Sun size={17} /> : <Moon size={17} />}
-              {isDark ? 'Light' : 'Dark'}
-            </button>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[34rem]">
-              <StatCard icon={<Target size={18} />} isDark={isDark} label="Matched" value={`${matchedIds.size}/22`} />
-              <StatCard icon={<XCircle size={18} />} isDark={isDark} label="Misses" value={String(mistakes)} />
-              <StatCard icon={<Sparkles size={18} />} isDark={isDark} label="Accuracy" value={`${accuracy}%`} />
-              <StatCard icon={<Clock3 size={18} />} isDark={isDark} label="Time" value={formatTime(elapsedSeconds)} />
-            </div>
+interface DashboardProps {
+  bestTime: number | null;
+  isDark: boolean;
+  onSelectSet: (setId: string) => void;
+  onStartSet: (setId: string) => void;
+  questionSets: QuestionSet[];
+  selectedSetId: string;
+}
+
+function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
+  const selectedSet = questionSets.find((set) => set.id === selectedSetId) ?? questionSets[0];
+
+  return (
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-300 bg-white/80'}`}>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className={`text-lg font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Choose a question set</h2>
+            <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>
+              Select a deck now; add more decks later without changing the game screen.
+            </p>
           </div>
-        </header>
+          <div className={`hidden h-10 w-10 place-items-center rounded-md sm:grid ${isDark ? 'bg-stone-800 text-amber-300' : 'bg-stone-100 text-red-700'}`}>
+            <Layers3 size={20} />
+          </div>
+        </div>
 
-        <section className="grid gap-4 md:grid-cols-[minmax(0,1fr)_17rem]">
-          <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-300 bg-white/80'}`}>
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className={`text-lg font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Match each character to its meaning</h2>
-                <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>
-                  {remaining === 0 ? 'Board complete.' : `${remaining} remaining`}
-                </p>
-              </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {questionSets.map((questionSet) => {
+            const selected = questionSet.id === selectedSetId;
+            const preview = questionSet.items.slice(0, 6).map((item) => item.kanji).join(' ');
+
+            return (
               <button
-                onClick={initGame}
-                className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-                  isDark
-                    ? 'border-amber-700 bg-amber-600 text-stone-950 hover:bg-amber-500 focus:ring-amber-500 focus:ring-offset-stone-900'
-                    : 'border-stone-300 bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700 focus:ring-offset-2'
+                className={`rounded-lg border p-4 text-left shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                  selected
+                    ? isDark
+                      ? 'border-amber-500 bg-amber-950/50 focus:ring-amber-500 focus:ring-offset-stone-900'
+                      : 'border-red-700 bg-red-50 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
+                    : isDark
+                      ? 'border-stone-700 bg-stone-950 hover:border-stone-500 focus:ring-amber-500 focus:ring-offset-stone-900'
+                      : 'border-stone-300 bg-white hover:border-stone-400 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
                 }`}
+                key={questionSet.id}
+                onClick={() => onSelectSet(questionSet.id)}
                 type="button"
               >
-                <RotateCcw size={17} />
-                Reset
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>{questionSet.level}</p>
+                    <h3 className={`mt-1 text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{questionSet.title}</h3>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>
+                    {questionSet.items.length}
+                  </span>
+                </div>
+                <p className={`text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>{questionSet.description}</p>
+                <p className={`mt-5 text-3xl font-semibold tracking-normal ${isDark ? 'text-stone-100' : 'text-stone-900'}`}>{preview}</p>
               </button>
-            </div>
+            );
+          })}
+        </div>
+      </div>
 
-            <div className="grid grid-cols-2 gap-3 md:gap-5">
-              <KanjiColumn
-                isError={isError}
-                items={shuffledKanji}
-                isDark={isDark}
-                matchedIds={matchedIds}
-                onSelect={handleKanjiClick}
-                selectedId={selectedKanjiId}
-              />
-              <MeaningColumn
-                isError={isError}
-                items={shuffledMeanings}
-                isDark={isDark}
-                matchedIds={matchedIds}
-                onSelect={handleMeaningClick}
-                selectedId={selectedMeaningId}
-              />
-            </div>
-          </div>
+      <aside className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
+        <div className={`mb-4 grid h-12 w-12 place-items-center rounded-lg ${isDark ? 'bg-amber-600 text-stone-950' : 'bg-red-700 text-white'}`}>
+          <BookOpen size={24} />
+        </div>
+        <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Selected deck</p>
+        <h2 className={`mt-2 text-2xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{selectedSet.title}</h2>
+        <p className={`mt-2 text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>{selectedSet.description}</p>
+        <div className={`mt-5 rounded-md p-3 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
+          <p className={`text-xs font-bold uppercase tracking-[0.16em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
+          <p className={`mt-1 text-3xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+            {bestTime === null ? 'Not set' : formatTime(bestTime)}
+          </p>
+        </div>
+        <button
+          className={`mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 ${
+            isDark
+              ? 'bg-amber-500 text-stone-950 hover:bg-amber-400 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-stone-950'
+              : 'bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700 focus:ring-offset-2'
+          }`}
+          onClick={() => onStartSet(selectedSet.id)}
+          type="button"
+        >
+          <Play size={17} />
+          Start set
+        </button>
+      </aside>
+    </section>
+  );
+}
 
-          <aside className="flex flex-col gap-4">
-            <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
-              <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Current pick</p>
-              <div className={`mt-4 min-h-36 rounded-md p-4 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
-                {selectedKanji ? (
-                  <div className="flex h-full flex-col justify-between gap-4">
-                    <span className={`text-6xl font-semibold leading-none ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-                      {selectedKanji.kanji}
-                    </span>
-                    <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Choose the matching meaning.</p>
-                  </div>
-                ) : (
-                  <div className={`flex min-h-28 items-center text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
-                    Select a kanji to begin a match.
-                  </div>
-                )}
-              </div>
-            </div>
+interface GameBoardProps {
+  bestTime: number | null;
+  elapsedSeconds: number;
+  isComplete: boolean;
+  isDark: boolean;
+  isError: boolean;
+  matchedIds: Set<number>;
+  mistakes: number;
+  onKanjiSelect: (id: number) => void;
+  onMeaningSelect: (id: number) => void;
+  onReset: () => void;
+  remaining: number;
+  selectedKanji: KanjiData | undefined;
+  selectedKanjiId: number | null;
+  selectedMeaningId: number | null;
+  selectedSet: QuestionSet;
+  shuffledKanji: KanjiData[];
+  shuffledMeanings: KanjiData[];
+}
 
-            <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
-              <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
-              <p className={`mt-3 text-3xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-                {bestTime === null ? 'Not set' : formatTime(bestTime)}
+function GameBoard({
+  bestTime,
+  elapsedSeconds,
+  isComplete,
+  isDark,
+  isError,
+  matchedIds,
+  mistakes,
+  onKanjiSelect,
+  onMeaningSelect,
+  onReset,
+  remaining,
+  selectedKanji,
+  selectedKanjiId,
+  selectedMeaningId,
+  selectedSet,
+  shuffledKanji,
+  shuffledMeanings,
+}: GameBoardProps) {
+  return (
+    <>
+      <section className="grid gap-4 md:grid-cols-[minmax(0,1fr)_17rem]">
+        <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-300 bg-white/80'}`}>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className={`text-lg font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Match each character to its meaning</h2>
+              <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>
+                {remaining === 0 ? 'Board complete.' : `${remaining} remaining in ${selectedSet.title}`}
               </p>
             </div>
-          </aside>
-        </section>
-
-        {isComplete && (
-          <motion.section
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            className={`rounded-lg border p-6 text-center shadow-sm ${
-              isDark
-                ? 'border-emerald-800 bg-emerald-950/60 text-emerald-100'
-                : 'border-emerald-300 bg-emerald-50 text-emerald-900'
-            }`}
-            initial={{ opacity: 0, y: 10, scale: 0.98 }}
-          >
-            <div className={`mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full ${isDark ? 'bg-emerald-900 text-emerald-300' : 'bg-emerald-100 text-emerald-700'}`}>
-              <Award size={32} />
-            </div>
-            <h2 className="text-2xl font-bold">Perfect score. Subarashii!</h2>
-            <p className={`mt-2 text-sm ${isDark ? 'text-emerald-200' : 'text-emerald-800'}`}>
-              Finished in {formatTime(elapsedSeconds)} with {mistakes} misses.
-            </p>
             <button
-              onClick={initGame}
-              className={`mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 ${
+              onClick={onReset}
+              className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
                 isDark
-                  ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-stone-950'
-                  : 'bg-emerald-700 text-white hover:bg-emerald-800 focus:ring-emerald-700 focus:ring-offset-2'
+                  ? 'border-amber-700 bg-amber-600 text-stone-950 hover:bg-amber-500 focus:ring-amber-500 focus:ring-offset-stone-900'
+                  : 'border-stone-300 bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700 focus:ring-offset-2'
               }`}
               type="button"
             >
               <RotateCcw size={17} />
-              Play again
+              Reset
             </button>
-          </motion.section>
-        )}
-      </main>
-    </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 md:gap-5">
+            <KanjiColumn
+              isDark={isDark}
+              isError={isError}
+              items={shuffledKanji}
+              matchedIds={matchedIds}
+              onSelect={onKanjiSelect}
+              selectedId={selectedKanjiId}
+            />
+            <MeaningColumn
+              isDark={isDark}
+              isError={isError}
+              items={shuffledMeanings}
+              matchedIds={matchedIds}
+              onSelect={onMeaningSelect}
+              selectedId={selectedMeaningId}
+            />
+          </div>
+        </div>
+
+        <aside className="flex flex-col gap-4">
+          <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
+            <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Current pick</p>
+            <div className={`mt-4 min-h-36 rounded-md p-4 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
+              {selectedKanji ? (
+                <div className="flex h-full flex-col justify-between gap-4">
+                  <span className={`text-6xl font-semibold leading-none ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+                    {selectedKanji.kanji}
+                  </span>
+                  <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Choose the matching meaning.</p>
+                </div>
+              ) : (
+                <div className={`flex min-h-28 items-center text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
+                  Select a kanji to begin a match.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
+            <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
+            <p className={`mt-3 text-3xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+              {bestTime === null ? 'Not set' : formatTime(bestTime)}
+            </p>
+          </div>
+        </aside>
+      </section>
+
+      {isComplete && (
+        <motion.section
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          className={`rounded-lg border p-6 text-center shadow-sm ${
+            isDark
+              ? 'border-emerald-800 bg-emerald-950/60 text-emerald-100'
+              : 'border-emerald-300 bg-emerald-50 text-emerald-900'
+          }`}
+          initial={{ opacity: 0, y: 10, scale: 0.98 }}
+        >
+          <div className={`mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full ${isDark ? 'bg-emerald-900 text-emerald-300' : 'bg-emerald-100 text-emerald-700'}`}>
+            <Award size={32} />
+          </div>
+          <h2 className="text-2xl font-bold">Perfect score. Subarashii!</h2>
+          <p className={`mt-2 text-sm ${isDark ? 'text-emerald-200' : 'text-emerald-800'}`}>
+            Finished in {formatTime(elapsedSeconds)} with {mistakes} misses.
+          </p>
+          <button
+            onClick={onReset}
+            className={`mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 ${
+              isDark
+                ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-stone-950'
+                : 'bg-emerald-700 text-white hover:bg-emerald-800 focus:ring-emerald-700 focus:ring-offset-2'
+            }`}
+            type="button"
+          >
+            <RotateCcw size={17} />
+            Play again
+          </button>
+        </motion.section>
+      )}
+    </>
   );
 }
 
@@ -415,8 +693,8 @@ function SplashScreen({ isDark }: { isDark: boolean }) {
 }
 
 interface MatchColumnProps {
-  isError: boolean;
   isDark: boolean;
+  isError: boolean;
   items: KanjiData[];
   matchedIds: Set<number>;
   onSelect: (id: number) => void;
@@ -431,14 +709,14 @@ function KanjiColumn({ isDark, isError, items, matchedIds, onSelect, selectedId 
         .filter((item) => !matchedIds.has(item.id))
         .map((item) => (
           <Fragment key={`kanji-${item.id}`}>
-          <MatchButton
-            isDark={isDark}
-            isError={isError}
-            onClick={() => onSelect(item.id)}
-            selected={selectedId === item.id}
-          >
-            <span className="text-4xl font-semibold leading-none sm:text-5xl">{item.kanji}</span>
-          </MatchButton>
+            <MatchButton
+              isDark={isDark}
+              isError={isError}
+              onClick={() => onSelect(item.id)}
+              selected={selectedId === item.id}
+            >
+              <span className="text-4xl font-semibold leading-none sm:text-5xl">{item.kanji}</span>
+            </MatchButton>
           </Fragment>
         ))}
     </div>
@@ -453,16 +731,16 @@ function MeaningColumn({ isDark, isError, items, matchedIds, onSelect, selectedI
         .filter((item) => !matchedIds.has(item.id))
         .map((item) => (
           <Fragment key={`meaning-${item.id}`}>
-          <MatchButton
-            isDark={isDark}
-            isError={isError}
-            onClick={() => onSelect(item.id)}
-            selected={selectedId === item.id}
-          >
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-bold text-current sm:text-base">{item.meaning}</span>
-            </span>
-          </MatchButton>
+            <MatchButton
+              isDark={isDark}
+              isError={isError}
+              onClick={() => onSelect(item.id)}
+              selected={selectedId === item.id}
+            >
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-sm font-bold text-current sm:text-base">{item.meaning}</span>
+              </span>
+            </MatchButton>
           </Fragment>
         ))}
     </div>
@@ -492,28 +770,28 @@ function MatchButton({ children, isDark, isError, onClick, selected }: MatchButt
     <motion.button
       animate={
         selected && isError
+          ? {
+              backgroundColor: '#fef2f2',
+              borderColor: '#dc2626',
+              color: '#991b1b',
+              opacity: 1,
+              x: [-5, 5, -5, 5, 0],
+            }
+          : selected
             ? {
-                backgroundColor: '#fef2f2',
-                borderColor: '#dc2626',
-                color: '#991b1b',
+                backgroundColor: isDark ? '#451a03' : '#fff7ed',
+                borderColor: isDark ? '#f59e0b' : '#c2410c',
+                color: isDark ? '#fef3c7' : '#9a3412',
                 opacity: 1,
-                x: [-5, 5, -5, 5, 0],
+                scale: 1.02,
               }
-            : selected
-              ? {
-                  backgroundColor: isDark ? '#451a03' : '#fff7ed',
-                  borderColor: isDark ? '#f59e0b' : '#c2410c',
-                  color: isDark ? '#fef3c7' : '#9a3412',
-                  opacity: 1,
-                  scale: 1.02,
-                }
-              : {
-                  backgroundColor: isDark ? '#1c1917' : '#ffffff',
-                  borderColor: isDark ? '#44403c' : '#e7e5e4',
-                  color: isDark ? '#f5f5f4' : '#1c1917',
-                  opacity: 1,
-                  scale: 1,
-                }
+            : {
+                backgroundColor: isDark ? '#1c1917' : '#ffffff',
+                borderColor: isDark ? '#44403c' : '#e7e5e4',
+                color: isDark ? '#f5f5f4' : '#1c1917',
+                opacity: 1,
+                scale: 1,
+              }
       }
       aria-pressed={selected}
       className={`relative flex min-h-20 w-full items-center justify-center rounded-lg border-2 px-3 text-center shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-default sm:min-h-24 ${

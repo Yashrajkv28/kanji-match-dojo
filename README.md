@@ -1,14 +1,23 @@
 # Kanji Match Dojo
 
-Kanji Match Dojo is a lightweight React game for drilling beginner kanji by matching each character to its English meaning.
+Kanji Match Dojo is a focused React matching game for practicing beginner kanji recognition. It starts from a deck dashboard, then drills the selected question set by matching each kanji to its English meaning.
+
+![Kanji Match Dojo dashboard](docs/dashboard.png)
+
+## Live App
+
+https://kanji-matcher-challenge.vercel.app
 
 ## Features
 
-- 22 beginner kanji covering numbers, nature, directions, and common nouns.
-- Exam-style matching flow with no reading hints on the active prompt or answer cards.
-- Correct pairs disappear from both columns to keep the board focused.
-- Miss, match, accuracy, timer, and best-time tracking.
-- Light and dark modes with a matching splash screen on every reload.
+- Deck dashboard for selecting the active question set.
+- One built-in starter deck with 22 beginner kanji.
+- Future-ready question set structure for adding more decks.
+- Exam-style matching with no reading hints on active prompts or answers.
+- Correct pairs disappear from both columns.
+- Match count, miss count, accuracy, timer, and per-deck best time.
+- Light and dark mode with a matching splash screen on every reload.
+- Fully client-side React app with no required environment variables.
 
 ## Tech Stack
 
@@ -19,14 +28,25 @@ Kanji Match Dojo is a lightweight React game for drilling beginner kanji by matc
 - Motion
 - Lucide React
 
-## Run Locally
+## Getting Started
+
+Install dependencies:
 
 ```bash
 npm install
+```
+
+Run the development server:
+
+```bash
 npm run dev
 ```
 
-The local dev server runs on `http://localhost:3000/`.
+Open:
+
+```text
+http://localhost:3000/
+```
 
 ## Build
 
@@ -34,12 +54,29 @@ The local dev server runs on `http://localhost:3000/`.
 npm run build
 ```
 
-The production output is generated in `dist/`.
+The production build is written to `dist/`.
 
 ## Scripts
 
-- `npm run dev` starts the development server.
-- `npm run build` creates a production build.
-- `npm run preview` serves the production build locally.
-- `npm run lint` runs TypeScript checks.
-- `npm run clean` removes `dist`.
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the Vite development server on port 3000. |
+| `npm run build` | Create a production build. |
+| `npm run preview` | Preview the production build locally. |
+| `npm run lint` | Run TypeScript checks. |
+| `npm run clean` | Remove `dist`. |
+
+## Adding More Question Sets
+
+Question sets live in `src/App.tsx` inside `QUESTION_SETS`. Add another object with a unique `id`, display metadata, and an `items` array shaped like this:
+
+```ts
+{
+  id: 23,
+  kanji: '中',
+  meaning: 'Middle',
+  reading: 'naka'
+}
+```
+
+The dashboard and matcher will pick it up automatically.
