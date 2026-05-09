@@ -69,7 +69,6 @@ const QUESTION_SETS: QuestionSet[] = [
 ];
 
 const THEME_KEY = 'kanji-matcher-theme';
-const SELECTED_SET_KEY = 'kanji-matcher-selected-set';
 
 type AppView = 'dashboard' | 'game';
 type Theme = 'light' | 'dark';
@@ -98,19 +97,13 @@ function getInitialTheme(): Theme {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function getInitialSetId(): string {
-  const storedSetId = window.localStorage.getItem(SELECTED_SET_KEY);
-  const hasStoredSet = QUESTION_SETS.some((set) => set.id === storedSetId);
-  return hasStoredSet && storedSetId ? storedSetId : QUESTION_SETS[0].id;
-}
-
 function getBestTimeKey(setId: string): string {
   return `kanji-matcher-best-time:${setId}`;
 }
 
 export default function App() {
   const [appView, setAppView] = useState<AppView>('dashboard');
-  const [selectedSetId, setSelectedSetId] = useState(getInitialSetId);
+  const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
   const [shuffledKanji, setShuffledKanji] = useState<KanjiData[]>([]);
   const [shuffledMeanings, setShuffledMeanings] = useState<KanjiData[]>([]);
   const [selectedKanjiId, setSelectedKanjiId] = useState<number | null>(null);
@@ -125,21 +118,22 @@ export default function App() {
 
   const isDark = theme === 'dark';
   const selectedSet = useMemo(
-    () => QUESTION_SETS.find((set) => set.id === selectedSetId) ?? QUESTION_SETS[0],
+    () => QUESTION_SETS.find((set) => set.id === selectedSetId),
     [selectedSetId],
   );
-  const totalQuestions = selectedSet.items.length;
+  const activeSet = selectedSet ?? QUESTION_SETS[0];
+  const totalQuestions = activeSet.items.length;
   const isComplete = matchedIds.size === totalQuestions;
   const attempts = matchedIds.size + mistakes;
   const accuracy = attempts === 0 ? 100 : Math.round((matchedIds.size / attempts) * 100);
   const remaining = totalQuestions - matchedIds.size;
 
   const selectedKanji = useMemo(
-    () => selectedSet.items.find((item) => item.id === selectedKanjiId),
-    [selectedKanjiId, selectedSet.items],
+    () => activeSet.items.find((item) => item.id === selectedKanjiId),
+    [activeSet.items, selectedKanjiId],
   );
 
-  const initGame = useCallback((questionSet: QuestionSet = selectedSet) => {
+  const initGame = useCallback((questionSet: QuestionSet = activeSet) => {
     setShuffledKanji(shuffle(questionSet.items));
     setShuffledMeanings(shuffle(questionSet.items));
     setSelectedKanjiId(null);
@@ -148,19 +142,15 @@ export default function App() {
     setIsError(false);
     setMistakes(0);
     setElapsedSeconds(0);
-  }, [selectedSet]);
+  }, [activeSet]);
 
   useEffect(() => {
-    initGame(selectedSet);
-  }, [initGame, selectedSet]);
+    initGame(activeSet);
+  }, [activeSet, initGame]);
 
   useEffect(() => {
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
-
-  useEffect(() => {
-    window.localStorage.setItem(SELECTED_SET_KEY, selectedSetId);
-  }, [selectedSetId]);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => {
@@ -171,6 +161,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!selectedSet) {
+      setBestTime(null);
+      return;
+    }
+
     const storedBestTime = window.localStorage.getItem(getBestTimeKey(selectedSet.id));
     if (storedBestTime !== null) {
       const parsedBestTime = Number(storedBestTime);
@@ -179,7 +174,7 @@ export default function App() {
     }
 
     setBestTime(null);
-  }, [selectedSet.id]);
+  }, [selectedSet]);
 
   useEffect(() => {
     if (appView !== 'game' || isComplete) {
@@ -203,10 +198,10 @@ export default function App() {
         return previousBestTime;
       }
 
-      window.localStorage.setItem(getBestTimeKey(selectedSet.id), String(elapsedSeconds));
+      window.localStorage.setItem(getBestTimeKey(activeSet.id), String(elapsedSeconds));
       return elapsedSeconds;
     });
-  }, [appView, elapsedSeconds, isComplete, selectedSet.id]);
+  }, [activeSet.id, appView, elapsedSeconds, isComplete]);
 
   const finishAttempt = useCallback((kanjiId: number, meaningId: number) => {
     setSelectedKanjiId(kanjiId);
@@ -269,7 +264,7 @@ export default function App() {
     setAppView('dashboard');
   };
 
-  const handleStartSet = (setId = selectedSet.id) => {
+  const handleStartSet = (setId: string) => {
     const questionSet = QUESTION_SETS.find((set) => set.id === setId) ?? QUESTION_SETS[0];
     setSelectedSetId(questionSet.id);
     initGame(questionSet);
@@ -289,7 +284,7 @@ export default function App() {
           isDark={isDark}
           onBackToDashboard={() => setAppView('dashboard')}
           onToggleTheme={toggleTheme}
-          selectedSet={selectedSet}
+          selectedSet={activeSet}
           stats={{
             accuracy,
             elapsedSeconds,
@@ -306,7 +301,7 @@ export default function App() {
             onSelectSet={handleSelectSet}
             onStartSet={handleStartSet}
             questionSets={QUESTION_SETS}
-            selectedSetId={selectedSet.id}
+            selectedSetId={selectedSetId}
           />
         ) : (
           <GameBoard
@@ -319,12 +314,12 @@ export default function App() {
             mistakes={mistakes}
             onKanjiSelect={handleKanjiClick}
             onMeaningSelect={handleMeaningClick}
-            onReset={() => initGame(selectedSet)}
+            onReset={() => initGame(activeSet)}
             remaining={remaining}
             selectedKanji={selectedKanji}
             selectedKanjiId={selectedKanjiId}
             selectedMeaningId={selectedMeaningId}
-            selectedSet={selectedSet}
+            selectedSet={activeSet}
             shuffledKanji={shuffledKanji}
             shuffledMeanings={shuffledMeanings}
           />
@@ -417,11 +412,11 @@ interface DashboardProps {
   onSelectSet: (setId: string) => void;
   onStartSet: (setId: string) => void;
   questionSets: QuestionSet[];
-  selectedSetId: string;
+  selectedSetId: string | null;
 }
 
 function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
-  const selectedSet = questionSets.find((set) => set.id === selectedSetId) ?? questionSets[0];
+  const selectedSet = questionSets.find((set) => set.id === selectedSetId);
 
   return (
     <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -479,22 +474,35 @@ function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, se
         <div className={`mb-4 grid h-12 w-12 place-items-center rounded-lg ${isDark ? 'bg-amber-600 text-stone-950' : 'bg-red-700 text-white'}`}>
           <BookOpen size={24} />
         </div>
-        <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Selected deck</p>
-        <h2 className={`mt-2 text-2xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{selectedSet.title}</h2>
-        <p className={`mt-2 text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>{selectedSet.description}</p>
-        <div className={`mt-5 rounded-md p-3 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
-          <p className={`text-xs font-bold uppercase tracking-[0.16em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
-          <p className={`mt-1 text-3xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-            {bestTime === null ? 'Not set' : formatTime(bestTime)}
-          </p>
-        </div>
+        <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
+          {selectedSet ? 'Selected deck' : 'No deck selected'}
+        </p>
+        <h2 className={`mt-2 text-2xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+          {selectedSet ? selectedSet.title : 'Choose a set'}
+        </h2>
+        <p className={`mt-2 text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>
+          {selectedSet ? selectedSet.description : 'Pick a question set from the dashboard before starting a drill.'}
+        </p>
+        {selectedSet && (
+          <div className={`mt-5 rounded-md p-3 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
+            <p className={`text-xs font-bold uppercase tracking-[0.16em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
+            <p className={`mt-1 text-3xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+              {bestTime === null ? 'Not set' : formatTime(bestTime)}
+            </p>
+          </div>
+        )}
         <button
-          className={`mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 ${
+          className={`mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${
             isDark
               ? 'bg-amber-500 text-stone-950 hover:bg-amber-400 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-stone-950'
               : 'bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700 focus:ring-offset-2'
           }`}
-          onClick={() => onStartSet(selectedSet.id)}
+          disabled={!selectedSet}
+          onClick={() => {
+            if (selectedSet) {
+              onStartSet(selectedSet.id);
+            }
+          }}
           type="button"
         >
           <Play size={17} />

@@ -16,6 +16,8 @@ For project changes, use this workflow:
 - Renamed the app to Kanji Match Dojo and updated browser tab metadata.
 - Rebuilt the README for GitHub with a clean application screenshot.
 - Added the question set dashboard so the current 22-kanji set is selectable and future sets can be added cleanly.
+- Fixed dashboard deck selection so no deck is shown as selected until the user selects one.
+- Stored best times in browser `localStorage` by deck id, which persists on the same browser/device.
 - Added light and dark mode with matching splash screens on reload.
 - Fixed matched pairs so both the kanji and meaning disappear after a correct match.
 - Removed reading hints from the active pick and answer cards to keep the flow exam-like.

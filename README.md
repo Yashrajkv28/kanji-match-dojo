@@ -56,6 +56,10 @@ npm run build
 
 The production build is written to `dist/`.
 
+## Progress Storage
+
+Best times are stored in the browser with `localStorage`, keyed by question-set id. That keeps each deck's best time available after reloads on the same browser and device. It is not a cloud account system, so best times do not sync across browsers or devices.
+
 ## Scripts
 
 | Command | Description |
