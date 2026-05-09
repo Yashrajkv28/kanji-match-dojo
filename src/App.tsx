@@ -278,7 +278,10 @@ export default function App() {
   return (
     <div className={isDark ? 'min-h-screen bg-[#12110f] text-stone-100' : 'min-h-screen bg-[#f6f4ef] text-stone-900'}>
       {showSplash && <SplashScreen isDark={isDark} />}
-      <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+      <main
+        className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8"
+        onClick={appView === 'dashboard' ? () => setSelectedSetId(null) : undefined}
+      >
         <AppHeader
           appView={appView}
           isDark={isDark}
@@ -298,7 +301,6 @@ export default function App() {
           <Dashboard
             bestTime={bestTime}
             isDark={isDark}
-            onClearSelection={() => setSelectedSetId(null)}
             onSelectSet={handleSelectSet}
             onStartSet={handleStartSet}
             questionSets={QUESTION_SETS}
@@ -410,18 +412,17 @@ function AppHeader({ appView, isDark, onBackToDashboard, onToggleTheme, selected
 interface DashboardProps {
   bestTime: number | null;
   isDark: boolean;
-  onClearSelection: () => void;
   onSelectSet: (setId: string) => void;
   onStartSet: (setId: string) => void;
   questionSets: QuestionSet[];
   selectedSetId: string | null;
 }
 
-function Dashboard({ bestTime, isDark, onClearSelection, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
+function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
   const selectedSet = questionSets.find((set) => set.id === selectedSetId);
 
   return (
-    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]" onClick={onClearSelection}>
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-300 bg-white/80'}`}>
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
