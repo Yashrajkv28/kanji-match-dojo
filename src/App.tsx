@@ -209,6 +209,9 @@ export default function App() {
   }, [appView, elapsedSeconds, isComplete, selectedSet.id]);
 
   const finishAttempt = useCallback((kanjiId: number, meaningId: number) => {
+    setSelectedKanjiId(kanjiId);
+    setSelectedMeaningId(meaningId);
+
     if (kanjiId === meaningId) {
       setMatchedIds((previousIds) => new Set(previousIds).add(kanjiId));
       setSelectedKanjiId(null);
@@ -216,8 +219,8 @@ export default function App() {
       return;
     }
 
-    setIsError(true);
     setMistakes((currentMistakes) => currentMistakes + 1);
+    setIsError(true);
     window.setTimeout(() => {
       setIsError(false);
       setSelectedKanjiId(null);
