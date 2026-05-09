@@ -17,6 +17,7 @@ For project changes, use this workflow:
 - Rebuilt the README for GitHub with a clean application screenshot.
 - Added the question set dashboard so the current 22-kanji set is selectable and future sets can be added cleanly.
 - Fixed dashboard deck selection so no deck is shown as selected until the user selects one.
+- Added dashboard background-click clearing so clicking outside a deck removes the selected deck and hides its best time.
 - Stored best times in browser `localStorage` by deck id, which persists on the same browser/device.
 - Added light and dark mode with matching splash screens on reload.
 - Fixed matched pairs so both the kanji and meaning disappear after a correct match.

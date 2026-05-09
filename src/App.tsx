@@ -298,6 +298,7 @@ export default function App() {
           <Dashboard
             bestTime={bestTime}
             isDark={isDark}
+            onClearSelection={() => setSelectedSetId(null)}
             onSelectSet={handleSelectSet}
             onStartSet={handleStartSet}
             questionSets={QUESTION_SETS}
@@ -409,17 +410,18 @@ function AppHeader({ appView, isDark, onBackToDashboard, onToggleTheme, selected
 interface DashboardProps {
   bestTime: number | null;
   isDark: boolean;
+  onClearSelection: () => void;
   onSelectSet: (setId: string) => void;
   onStartSet: (setId: string) => void;
   questionSets: QuestionSet[];
   selectedSetId: string | null;
 }
 
-function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
+function Dashboard({ bestTime, isDark, onClearSelection, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
   const selectedSet = questionSets.find((set) => set.id === selectedSetId);
 
   return (
-    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]" onClick={onClearSelection}>
       <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-300 bg-white/80'}`}>
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
@@ -450,7 +452,10 @@ function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, se
                       : 'border-stone-300 bg-white hover:border-stone-400 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
                 }`}
                 key={questionSet.id}
-                onClick={() => onSelectSet(questionSet.id)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectSet(questionSet.id);
+                }}
                 type="button"
               >
                 <div className="mb-4 flex items-start justify-between gap-3">
@@ -498,7 +503,8 @@ function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, se
               : 'bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700 focus:ring-offset-2'
           }`}
           disabled={!selectedSet}
-          onClick={() => {
+          onClick={(event) => {
+            event.stopPropagation();
             if (selectedSet) {
               onStartSet(selectedSet.id);
             }
