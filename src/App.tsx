@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
@@ -14,6 +14,8 @@ import {
   Clock3,
   Eye,
   Flag,
+  Globe2,
+  HelpCircle,
   Languages,
   Layers3,
   ListFilter,
@@ -100,6 +102,7 @@ const QUESTION_SETS: QuestionSet[] = [
 
 const THEME_KEY = 'kanji-matcher-theme';
 const PAPER_PROGRESS_KEY = 'kanji-match-dojo-paper-practice:v1';
+const LANGUAGE_KEY = 'kanji-match-dojo-language:v1';
 const ALL_PAPERS_ID = 'all-papers';
 
 type KanjiAppView = 'dashboard' | 'game';
@@ -107,6 +110,7 @@ type PaperAppView = 'paper-dashboard' | 'paper-learn' | 'paper-test' | 'paper-re
 type AppView = KanjiAppView | PaperAppView;
 type AppMode = 'kanji' | 'papers';
 type Theme = 'light' | 'dark';
+type Language = 'en' | 'ja';
 type PaperFilter = 'all' | 'unanswered' | 'wrong' | 'review';
 
 type PaperListingSection = CuratedPaperSection;
@@ -157,6 +161,142 @@ function getInitialTheme(): Theme {
     return storedTheme;
   }
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function getInitialLanguage(): Language {
+  const storedLanguage = window.localStorage.getItem(LANGUAGE_KEY);
+  return storedLanguage === 'ja' ? 'ja' : 'en';
+}
+
+const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
+  'Kanji Match Dojo': '漢字マッチ道場',
+  'Kanji match dashboard': '漢字マッチ ダッシュボード',
+  'Question paper practice': '過去問練習',
+  'Question Paper Practice': '過去問練習',
+  'Choose a question set': '問題セットを選ぶ',
+  'Pick a deck to drill kanji â†” meaning matching.': '漢字と意味を結びつけるデッキを選びます。',
+  'Pick a deck to drill kanji ↔ meaning matching.': '漢字と意味を結びつけるデッキを選びます。',
+  'Selected deck': '選択中のデッキ',
+  'No deck selected': 'デッキ未選択',
+  'Choose a set': 'セットを選ぶ',
+  'Pick a deck before starting a drill.': '練習を始める前にデッキを選んでください。',
+  'Best time': 'ベストタイム',
+  'Not set': '未設定',
+  'Start set': 'スタート',
+  'Match each character to its meaning': '各文字を意味とマッチ',
+  'Board complete.': 'ボード完了。',
+  'Current pick': '現在の選択',
+  'Choose the matching meaning.': '対応する意味を選んでください。',
+  'Select a kanji to begin a match.': '漢字を選んでマッチを始めます。',
+  'Perfect score. Subarashii!': '満点です。すばらしい！',
+  'Play again': 'もう一度',
+  'Kanji': '漢字',
+  'Papers': '過去問',
+  'Meaning': '意味',
+  'Matched': '正解',
+  'Misses': 'ミス',
+  'Accuracy': '正答率',
+  'Time': '時間',
+  'Reset': 'リセット',
+  'Dashboard': 'ダッシュボード',
+  'Light': 'ライト',
+  'Dark': 'ダーク',
+  'Dark mode': 'ダークモード',
+  'Light mode': 'ライトモード',
+  'English': '英語',
+  'Japanese': '日本語',
+  'Language': '言語',
+  'Shortcuts': 'ショートカット',
+  'Keyboard shortcuts': 'キーボードショートカット',
+  'Toggle theme': 'テーマ切替',
+  'Switch mode': 'モード切替',
+  'Move through paper learn questions': '学習問題を移動',
+  'Mark current question for review': '現在の問題を復習に追加',
+  'Submit test': 'テストを提出',
+  'Open shortcuts': 'ショートカットを開く',
+  '? opens shortcuts': '? でショートカット',
+  'opens shortcuts': 'でショートカット',
+  'Close': '閉じる',
+  'Skip': 'スキップ',
+  'Pick a paper': '過去問を選ぶ',
+  'View questions': '問題を見る',
+  'View opened questions': '開いている問題を見る',
+  'Opened paper': '開いている過去問',
+  'Questions': '問題',
+  'Answered': '回答済み',
+  'Review': '復習',
+  'Wrong': '誤答',
+  'Progress': '進捗',
+  'Full paper review': '全問レビュー',
+  'Full paper test': '全問テスト',
+  'Review section': 'セクション復習',
+  'Test section': 'セクションテスト',
+  'Practice review-later': '後で復習を練習',
+  'All papers aggregate': '全過去問の集計',
+  'Sections': 'セクション',
+  'Full paper': '全問',
+  'Opened': '開いています',
+  'Back': '戻る',
+  'Mark for review': '復習に追加',
+  'Marked': '追加済み',
+  'Test these': 'これをテスト',
+  'No questions in scope': 'この範囲に問題はありません',
+  'Try a different paper or section.': '別の過去問またはセクションを選んでください。',
+  'Answer': '答え',
+  'Previous': '前へ',
+  'Next': '次へ',
+  'to navigate': 'で移動',
+  'No questions available.': '問題がありません。',
+  'Submit': '提出',
+  'Descriptive question â€” review the answer in Learn mode.': '記述問題です。学習モードで答えを確認してください。',
+  'Descriptive question — review the answer in Learn mode.': '記述問題です。学習モードで答えを確認してください。',
+  'Results': '結果',
+  'Retry': '再挑戦',
+  'Your answer:': 'あなたの答え:',
+  'Correct:': '正解:',
+  'Not answered': '未回答',
+  'Search prompts': '問題を検索',
+  'all': 'すべて',
+  'unanswered': '未回答',
+  'wrong': '誤答',
+  'review': '復習',
+  'Mark': '追加',
+  'No questions match the current filter.': '現在のフィルターに一致する問題はありません。',
+  'PaperKind.SEE': 'SEE',
+};
+
+const JAPANESE_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/^(\d+) remaining in (.+)$/u, '$1 問残り（$2）'],
+  [/^Finished in (.+) with (\d+) misses\.$/u, '$1 で完了、ミス $2 回。'],
+  [/^(\d+) curated papers Â· (\d+) questions Â· (\d+) flagged for review$/u, '$1 件の過去問・$2 問・復習 $3 件'],
+  [/^(\d+) curated papers · (\d+) questions · (\d+) flagged for review$/u, '$1 件の過去問・$2 問・復習 $3 件'],
+  [/^(\d+) questions$/u, '$1 問'],
+  [/^(\d+) section$/u, '$1 セクション'],
+  [/^(\d+) sections$/u, '$1 セクション'],
+  [/^(\d+) q$/u, '$1 問'],
+  [/^(\d+) to review$/u, '復習 $1 件'],
+  [/^(\d+) wrong$/u, '誤答 $1 件'],
+  [/^Reviewed (\d+)\/(\d+)$/u, '復習済み $1/$2'],
+  [/^(\d+)\/(\d+) reviewed Â· (.+)$/u, '$1/$2 復習済み・$3'],
+  [/^(\d+)\/(\d+) reviewed · (.+)$/u, '$1/$2 復習済み・$3'],
+  [/^Practice review-later \((\d+)\)$/u, '後で復習を練習（$1）'],
+  [/^Sections Â· (\d+)$/u, 'セクション・$1'],
+  [/^Sections · (\d+)$/u, 'セクション・$1'],
+  [/^(\d+) of (\d+) correct Â· (\d+)% Â· (.+)$/u, '$2 問中 $1 問正解・$3%・$4'],
+  [/^(\d+) of (\d+) correct · (\d+)% · (.+)$/u, '$2 問中 $1 問正解・$3%・$4'],
+];
+
+function translateToJapanese(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  const exact = JAPANESE_EXACT_TRANSLATIONS[trimmed];
+  if (exact) return value.replace(trimmed, exact);
+  for (const [pattern, replacement] of JAPANESE_REPLACEMENTS) {
+    if (pattern.test(trimmed)) {
+      return value.replace(trimmed, trimmed.replace(pattern, replacement));
+    }
+  }
+  return value;
 }
 
 function getBestTimeKey(setId: string): string {
@@ -241,6 +381,75 @@ function getSectionLabel(paperId: string, sectionId: string): string {
   return section?.title ?? 'Selected section';
 }
 
+function TranslatedSurface({ children, language }: { children: ReactNode; language: Language }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const textOriginals = useRef(new WeakMap<Text, string>());
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return undefined;
+
+    const translateTextNode = (node: Text) => {
+      const current = node.nodeValue ?? '';
+      const stored = textOriginals.current.get(node);
+      if (stored === undefined) {
+        textOriginals.current.set(node, current);
+      } else if (language === 'ja' && current !== translateToJapanese(stored)) {
+        textOriginals.current.set(node, current);
+      } else if (language === 'en' && current !== stored) {
+        textOriginals.current.set(node, current);
+      }
+
+      const original = textOriginals.current.get(node) ?? current;
+      const translated = language === 'ja' ? translateToJapanese(original) : original;
+      if (node.nodeValue !== translated) {
+        node.nodeValue = translated;
+      }
+    };
+
+    const translateElementAttributes = (element: Element) => {
+      const htmlElement = element as HTMLElement;
+      for (const attribute of ['placeholder', 'aria-label', 'title']) {
+        const current = htmlElement.getAttribute(attribute);
+        if (!current) continue;
+        const dataKey = `i18nOriginal${attribute.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())}`;
+        const stored = htmlElement.dataset[dataKey];
+        const original = stored ?? current;
+        htmlElement.dataset[dataKey] = original;
+        const translated = language === 'ja' ? translateToJapanese(original) : original;
+        if (current !== translated) {
+          htmlElement.setAttribute(attribute, translated);
+        }
+      }
+    };
+
+    const applyTranslations = () => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          const parent = node.parentElement;
+          if (!parent || ['SCRIPT', 'STYLE', 'TEXTAREA'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
+          return node.nodeValue?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        },
+      });
+
+      let next = walker.nextNode();
+      while (next) {
+        translateTextNode(next as Text);
+        next = walker.nextNode();
+      }
+
+      root.querySelectorAll('[placeholder], [aria-label], [title]').forEach(translateElementAttributes);
+    };
+
+    applyTranslations();
+    const observer = new MutationObserver(() => applyTranslations());
+    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['placeholder', 'aria-label', 'title'] });
+    return () => observer.disconnect();
+  }, [language]);
+
+  return <div ref={rootRef}>{children}</div>;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    App component
    ─────────────────────────────────────────────────────────────────────────── */
@@ -261,6 +470,8 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [bestTime, setBestTime] = useState<number | null>(null);
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [language, setLanguage] = useState<Language>(getInitialLanguage);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
 
   // Paper-practice state
@@ -316,6 +527,11 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LANGUAGE_KEY, language);
+    document.documentElement.lang = language === 'ja' ? 'ja' : 'en';
+  }, [language]);
 
   useEffect(() => {
     window.localStorage.setItem(PAPER_PROGRESS_KEY, JSON.stringify(paperProgress));
@@ -514,31 +730,71 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appView, paperQuestionIndex, paperQuestionSet.length, paperScopeKey]);
 
+  const toggleLanguage = () => setLanguage((current) => (current === 'en' ? 'ja' : 'en'));
+
   const switchMode = (next: AppMode) => {
     setAppMode(next);
     setAppView(next === 'kanji' ? 'dashboard' : 'paper-dashboard');
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const editable = isEditableKeyboardTarget(e.target);
+      if (e.key === 'Escape' && showShortcuts) {
+        e.preventDefault();
+        setShowShortcuts(false);
+        return;
+      }
+      if (editable) return;
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts(true);
+      } else if (e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        toggleTheme();
+      } else if (e.key === '1') {
+        e.preventDefault();
+        switchMode('kanji');
+      } else if (e.key === '2') {
+        e.preventDefault();
+        switchMode('papers');
+      } else if (e.key.toLowerCase() === 'r' && currentPaperQuestion && (appView === 'paper-learn' || appView === 'paper-test')) {
+        e.preventDefault();
+        togglePaperReview(currentPaperQuestion.id);
+      } else if (e.key === 'Enter' && appView === 'paper-test') {
+        e.preventDefault();
+        finishPaperTest();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [appView, currentPaperQuestion, showShortcuts]);
 
   /* ── Render ── */
   const inPaperMode = appMode === 'papers';
 
   return (
     <div className={isDark ? 'min-h-screen bg-[#12110f] text-stone-100' : 'min-h-screen bg-[#f6f4ef] text-stone-900'}>
-      {showSplash && <SplashScreen isDark={isDark} />}
-      <main
-        className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8"
-        onClick={appView === 'dashboard' ? () => setSelectedSetId(null) : undefined}
-      >
-        <AppHeader
-          appMode={appMode}
-          appView={appView}
-          isDark={isDark}
-          onBackToDashboard={() => setAppView(inPaperMode ? 'paper-dashboard' : 'dashboard')}
-          onSwitchMode={switchMode}
-          onToggleTheme={toggleTheme}
-          selectedSet={activeSet}
-          stats={{ accuracy, elapsedSeconds, matched: matchedIds.size, mistakes, total: totalQuestions }}
-        />
+      <TranslatedSurface language={language}>
+        {showSplash && <SplashScreen isDark={isDark} onSkip={() => setShowSplash(false)} />}
+        {showShortcuts && <KeyboardShortcutsModal appMode={appMode} appView={appView} isDark={isDark} onClose={() => setShowShortcuts(false)} />}
+        <main
+          className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8"
+          onClick={appView === 'dashboard' ? () => setSelectedSetId(null) : undefined}
+        >
+          <AppHeader
+            appMode={appMode}
+            appView={appView}
+            isDark={isDark}
+            language={language}
+            onBackToDashboard={() => setAppView(inPaperMode ? 'paper-dashboard' : 'dashboard')}
+            onOpenShortcuts={() => setShowShortcuts(true)}
+            onSwitchMode={switchMode}
+            onToggleLanguage={toggleLanguage}
+            onToggleTheme={toggleTheme}
+            selectedSet={activeSet}
+            stats={{ accuracy, elapsedSeconds, matched: matchedIds.size, mistakes, total: totalQuestions }}
+          />
 
         {/* Kanji mode */}
         {appView === 'dashboard' && (
@@ -650,7 +906,8 @@ export default function App() {
             wrongIds={wrongIds}
           />
         )}
-      </main>
+        </main>
+      </TranslatedSurface>
     </div>
   );
 }
@@ -663,14 +920,17 @@ interface AppHeaderProps {
   appMode: AppMode;
   appView: AppView;
   isDark: boolean;
+  language: Language;
   onBackToDashboard: () => void;
+  onOpenShortcuts: () => void;
   onSwitchMode: (mode: AppMode) => void;
+  onToggleLanguage: () => void;
   onToggleTheme: () => void;
   selectedSet: QuestionSet;
   stats: { accuracy: number; elapsedSeconds: number; matched: number; mistakes: number; total: number };
 }
 
-function AppHeader({ appMode, appView, isDark, onBackToDashboard, onSwitchMode, onToggleTheme, selectedSet, stats }: AppHeaderProps) {
+function AppHeader({ appMode, appView, isDark, language, onBackToDashboard, onOpenShortcuts, onSwitchMode, onToggleLanguage, onToggleTheme, selectedSet, stats }: AppHeaderProps) {
   const inGame = appView === 'game';
   const inPaperSub = appView === 'paper-learn' || appView === 'paper-test' || appView === 'paper-results' || appView === 'paper-browser';
 
@@ -684,9 +944,17 @@ function AppHeader({ appMode, appView, isDark, onBackToDashboard, onSwitchMode, 
           <p className={`text-[0.7rem] font-bold uppercase tracking-[0.2em] ${isDark ? 'text-amber-400' : 'text-red-700'}`}>
             {appMode === 'kanji' ? (inGame ? selectedSet.subtitle : 'Kanji match dashboard') : 'Question paper practice'}
           </p>
-          <h1 className={`text-2xl font-bold tracking-normal sm:text-3xl ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+          <h1 className={`bg-gradient-to-r bg-clip-text text-2xl font-bold tracking-normal text-transparent sm:text-3xl ${isDark ? 'from-amber-200 via-amber-100 to-stone-100' : 'from-red-700 via-red-900 to-stone-900'}`}>
             Kanji Match Dojo
           </h1>
+          <button
+            className={`mt-1 inline-flex items-center gap-1 text-[0.68rem] font-semibold ${isDark ? 'text-stone-500 hover:text-stone-300' : 'text-stone-500 hover:text-stone-700'}`}
+            onClick={onOpenShortcuts}
+            type="button"
+          >
+            <kbd className={`rounded border px-1.5 py-0.5 font-mono text-[0.65rem] ${isDark ? 'border-stone-700 bg-stone-900 text-amber-200' : 'border-stone-300 bg-white text-red-700'}`}>?</kbd>
+            opens shortcuts
+          </button>
         </div>
       </div>
 
@@ -694,7 +962,7 @@ function AppHeader({ appMode, appView, isDark, onBackToDashboard, onSwitchMode, 
         {/* Mode segmented control */}
         <div className={`inline-flex rounded-full border p-1 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white'}`}>
           <button
-            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition ${
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition sm:h-10 sm:px-4 ${
               appMode === 'kanji'
                 ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'
                 : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
@@ -706,7 +974,7 @@ function AppHeader({ appMode, appView, isDark, onBackToDashboard, onSwitchMode, 
             Kanji
           </button>
           <button
-            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition ${
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition sm:h-10 sm:px-4 ${
               appMode === 'papers'
                 ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'
                 : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
@@ -731,6 +999,30 @@ function AppHeader({ appMode, appView, isDark, onBackToDashboard, onSwitchMode, 
             Dashboard
           </button>
         )}
+
+        <button
+          aria-label="Switch language"
+          className={`inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-semibold transition ${
+            isDark ? 'border-stone-700 bg-stone-900 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-900 hover:bg-stone-100'
+          }`}
+          onClick={onToggleLanguage}
+          type="button"
+        >
+          <Globe2 size={17} />
+          {language === 'en' ? '日本語' : 'English'}
+        </button>
+
+        <button
+          aria-label="Open shortcuts"
+          className={`inline-flex h-10 w-10 items-center justify-center rounded-full border transition ${
+            isDark ? 'border-stone-700 bg-stone-900 text-amber-200 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-900 hover:bg-stone-100'
+          }`}
+          onClick={onOpenShortcuts}
+          title="? opens shortcuts"
+          type="button"
+        >
+          <HelpCircle size={17} />
+        </button>
 
         <button
           aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
@@ -760,6 +1052,73 @@ function AppHeader({ appMode, appView, isDark, onBackToDashboard, onSwitchMode, 
 /* ─────────────────────────────────────────────────────────────────────────────
    Kanji Dashboard (HEAD baseline)
    ─────────────────────────────────────────────────────────────────────────── */
+
+function KeyboardShortcutsModal({ appMode, appView, isDark, onClose }: { appMode: AppMode; appView: AppView; isDark: boolean; onClose: () => void }) {
+  const shortcuts = [
+    { keyName: '?', action: 'Open shortcuts' },
+    { keyName: 'Esc', action: 'Close' },
+    { keyName: 'M', action: 'Toggle theme' },
+    { keyName: '1 / 2 / 3', action: 'Switch mode' },
+  ];
+
+  if (appView === 'paper-learn') {
+    shortcuts.push(
+      { keyName: '← / →', action: 'Move through paper learn questions' },
+      { keyName: 'R', action: 'Mark for review' },
+    );
+  }
+
+  if (appView === 'paper-test') {
+    shortcuts.push(
+      { keyName: 'Enter', action: 'Submit test' },
+      { keyName: 'R', action: 'Mark current question for review' },
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
+      <button
+        aria-label="Close shortcuts"
+        className={`absolute inset-0 ${isDark ? 'bg-black/65' : 'bg-stone-950/30'}`}
+        onClick={onClose}
+        type="button"
+      />
+      <motion.section
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className={`relative w-full max-w-lg rounded-2xl border p-5 shadow-2xl ${isDark ? 'border-stone-700 bg-stone-900 text-stone-100' : 'border-stone-200 bg-white text-stone-950'}`}
+        initial={{ opacity: 0, scale: 0.97, y: 8 }}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>
+              {appMode === 'kanji' ? 'Kanji' : 'Papers'}
+            </p>
+            <h2 className="mt-1 text-xl font-bold">Keyboard shortcuts</h2>
+          </div>
+          <button
+            aria-label="Close shortcuts"
+            className={`inline-flex h-9 w-9 items-center justify-center rounded-full border ${isDark ? 'border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-100'}`}
+            onClick={onClose}
+            type="button"
+          >
+            <XCircle size={17} />
+          </button>
+        </div>
+        <div className="mt-5 grid gap-2">
+          {shortcuts.map((shortcut) => (
+            <div
+              className={`flex items-center justify-between gap-4 rounded-xl border px-3 py-2 ${isDark ? 'border-stone-800 bg-stone-950/70' : 'border-stone-200 bg-stone-50'}`}
+              key={`${shortcut.keyName}-${shortcut.action}`}
+            >
+              <span className={`text-sm font-medium ${isDark ? 'text-stone-300' : 'text-stone-700'}`}>{shortcut.action}</span>
+              <kbd className={`shrink-0 rounded-md border px-2 py-1 font-mono text-xs font-bold ${isDark ? 'border-stone-700 bg-stone-900 text-amber-200' : 'border-stone-300 bg-white text-red-700'}`}>{shortcut.keyName}</kbd>
+            </div>
+          ))}
+        </div>
+      </motion.section>
+    </div>
+  );
+}
 
 interface DashboardProps {
   bestTime: number | null;
@@ -1424,13 +1783,20 @@ function PaperQuestionBrowser({ answeredIds, filter, isDark, onBack, onFilterCha
   );
 }
 
-function SplashScreen({ isDark }: { isDark: boolean }) {
+function SplashScreen({ isDark, onSkip }: { isDark: boolean; onSkip: () => void }) {
   return (
-    <motion.div animate={{ opacity: 1 }} className={`fixed inset-0 z-50 flex items-center justify-center px-6 ${isDark ? 'bg-[#0f0e0c] text-stone-50' : 'bg-[#fbf7ef] text-stone-950'}`} initial={{ opacity: 0 }}>
+    <motion.div animate={{ opacity: 1 }} className={`fixed inset-0 z-50 flex items-center justify-center px-6 ${isDark ? 'bg-[#0f0e0c] text-stone-50' : 'bg-[#fbf7ef] text-stone-950'}`} initial={{ opacity: 0 }} onClick={onSkip}>
       <motion.div animate={{ opacity: 1, scale: 1, y: 0 }} className="flex flex-col items-center text-center" initial={{ opacity: 0, scale: 0.96, y: 10 }} transition={{ duration: 0.35 }}>
         <div className={`mb-5 grid h-20 w-20 place-items-center rounded-2xl border text-4xl font-bold shadow-sm ${isDark ? 'border-amber-700 bg-stone-900 text-amber-300' : 'border-red-200 bg-white text-red-700'}`}>{isDark ? '月' : '日'}</div>
         <div className={`mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'border-stone-700 text-amber-300' : 'border-stone-300 text-red-700'}`}>{isDark ? <Moon size={14} /> : <Sun size={14} />}{isDark ? 'Dark mode' : 'Light mode'}</div>
         <h2 className="text-3xl font-bold tracking-normal sm:text-4xl">Kanji Match Dojo</h2>
+        <button
+          className={`mt-4 rounded-full border px-4 py-1.5 text-xs font-bold ${isDark ? 'border-stone-700 bg-stone-900 text-stone-300 hover:bg-stone-800' : 'border-stone-300 bg-white text-stone-700 hover:bg-stone-100'}`}
+          onClick={onSkip}
+          type="button"
+        >
+          Skip
+        </button>
         <div className={`mt-6 h-1.5 w-44 overflow-hidden rounded-full ${isDark ? 'bg-stone-800' : 'bg-stone-200'}`}>
           <motion.div animate={{ x: ['-100%', '100%'] }} className={`h-full w-1/2 rounded-full ${isDark ? 'bg-amber-400' : 'bg-red-700'}`} transition={{ duration: 0.9, ease: 'easeInOut' }} />
         </div>
