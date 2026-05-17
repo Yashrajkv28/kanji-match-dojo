@@ -22,6 +22,7 @@ import {
   ListFilter,
   Moon,
   Play,
+  RefreshCw,
   RotateCcw,
   Search,
   Sparkles,
@@ -112,6 +113,7 @@ const THEME_KEY = 'kanji-matcher-theme';
 const PAPER_PROGRESS_KEY = 'kanji-match-dojo-paper-practice:v1';
 const LANGUAGE_KEY = 'kanji-match-dojo-language:v1';
 const TRAINER_STORAGE_KEY = 'kanji-match-dojo-trainer:v1';
+const KANJI_PROGRESS_KEY = 'kanji-match-dojo-kanji-progress:v1';
 const ALL_PAPERS_ID = 'all-papers';
 
 type KanjiAppView = 'dashboard' | 'game';
@@ -356,6 +358,17 @@ function getInitialTrainerStorage(): TrainerStorageState {
   }
 }
 
+function getInitialKanjiProgress(): Record<string, number> {
+  const stored = window.localStorage.getItem(KANJI_PROGRESS_KEY);
+  if (!stored) return {};
+  try {
+    const parsed = JSON.parse(stored);
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function getDefaultTrainerGameState(pairs: Pair[] = []): TrainerGameState {
   return {
     pairs,
@@ -547,6 +560,7 @@ export default function App() {
   const [language, setLanguage] = useState<Language>(getInitialLanguage);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [kanjiRunProgress, setKanjiRunProgress] = useState<Record<string, number>>(getInitialKanjiProgress);
 
   // Paper-practice state
   const [paperProgress, setPaperProgress] = useState<PaperProgressState>(getInitialPaperProgress);
@@ -558,6 +572,7 @@ export default function App() {
   const [paperElapsedSeconds, setPaperElapsedSeconds] = useState(0);
   const [paperBrowserFilter, setPaperBrowserFilter] = useState<PaperFilter>('all');
   const [paperSearch, setPaperSearch] = useState('');
+  const [paperSubmitConfirmOpen, setPaperSubmitConfirmOpen] = useState(false);
   const [trainerInitialStorage] = useState<TrainerStorageState>(getInitialTrainerStorage);
   const [trainerGame, setTrainerGame] = useState<TrainerGameState>(() => getDefaultTrainerGameState(trainerInitialStorage.pairs));
   const [trainerBestScore, setTrainerBestScore] = useState<number | null>(trainerInitialStorage.bestScore);
@@ -598,6 +613,14 @@ export default function App() {
     setElapsedSeconds(0);
   }, [activeSet]);
 
+  const shuffleKanjiColumns = () => {
+    setShuffledKanji(shuffle(activeSet.items));
+    setShuffledMeanings(shuffle(activeSet.items));
+    setSelectedKanjiId(null);
+    setSelectedMeaningId(null);
+    setIsError(false);
+  };
+
   useEffect(() => {
     initGame(activeSet);
   }, [activeSet, initGame]);
@@ -614,6 +637,10 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem(PAPER_PROGRESS_KEY, JSON.stringify(paperProgress));
   }, [paperProgress]);
+
+  useEffect(() => {
+    window.localStorage.setItem(KANJI_PROGRESS_KEY, JSON.stringify(kanjiRunProgress));
+  }, [kanjiRunProgress]);
 
   useEffect(() => {
     window.localStorage.setItem(TRAINER_STORAGE_KEY, JSON.stringify({
@@ -655,6 +682,14 @@ export default function App() {
       return elapsedSeconds;
     });
   }, [activeSet.id, appView, elapsedSeconds, isComplete]);
+
+  useEffect(() => {
+    if (appView !== 'game') return;
+    setKanjiRunProgress((previous) => ({
+      ...previous,
+      [activeSet.id]: matchedIds.size,
+    }));
+  }, [activeSet.id, appView, matchedIds.size]);
 
   // Paper test timer
   useEffect(() => {
@@ -738,6 +773,7 @@ export default function App() {
     setPaperQuestionIndex(0);
     setPaperAnswers({});
     setPaperElapsedSeconds(0);
+    setPaperSubmitConfirmOpen(false);
     setAppView('paper-test');
   };
 
@@ -771,6 +807,7 @@ export default function App() {
   };
 
   const finishPaperTest = () => {
+    setPaperSubmitConfirmOpen(false);
     setPaperProgress((prev) => {
       const newAnswered = new Set(prev.answeredIds);
       const newWrong = new Set(prev.wrongIds);
@@ -792,6 +829,15 @@ export default function App() {
       };
     });
     setAppView('paper-results');
+  };
+
+  const requestFinishPaperTest = () => {
+    const answeredCount = paperQuestionSet.filter((question) => paperAnswers[question.id] !== undefined).length;
+    if (answeredCount < paperQuestionSet.length) {
+      setPaperSubmitConfirmOpen(true);
+      return;
+    }
+    finishPaperTest();
   };
 
   const openReviewOnly = () => {
@@ -913,7 +959,7 @@ export default function App() {
         togglePaperReview(currentPaperQuestion.id);
       } else if (e.key === 'Enter' && appView === 'paper-test') {
         e.preventDefault();
-        finishPaperTest();
+        requestFinishPaperTest();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -953,6 +999,7 @@ export default function App() {
             isDark={isDark}
             onSelectSet={handleSelectSet}
             onStartSet={handleStartSet}
+            progressBySet={kanjiRunProgress}
             questionSets={QUESTION_SETS}
             selectedSetId={selectedSetId}
           />
@@ -969,6 +1016,7 @@ export default function App() {
             onKanjiSelect={handleKanjiClick}
             onMeaningSelect={handleMeaningClick}
             onReset={() => initGame(activeSet)}
+            onShuffle={shuffleKanjiColumns}
             remaining={remaining}
             selectedKanji={selectedKanji}
             selectedKanjiId={selectedKanjiId}
@@ -1015,16 +1063,20 @@ export default function App() {
         {appView === 'paper-test' && (
           <PaperTestMode
             answers={paperAnswers}
+            confirmSubmitOpen={paperSubmitConfirmOpen}
             currentIndex={paperQuestionIndex}
             elapsedSeconds={paperElapsedSeconds}
             isDark={isDark}
             onAnswer={submitPaperAnswer}
             onBack={() => setAppView('paper-dashboard')}
-            onFinish={finishPaperTest}
+            onCancelSubmit={() => setPaperSubmitConfirmOpen(false)}
+            onConfirmSubmit={finishPaperTest}
+            onFinish={requestFinishPaperTest}
             onJump={(i) => setPaperQuestionIndex(clampIndex(i, paperQuestionSet.length))}
             onMove={(d) => setPaperQuestionIndex((p) => clampIndex(p + d, paperQuestionSet.length))}
             question={currentPaperQuestion}
             questions={paperQuestionSet}
+            reviewIds={reviewIds}
             scopeTitle={`${getPaperLabel(selectedPaperId)} · ${getSectionLabel(selectedPaperId, selectedPaperSection)}`}
           />
         )}
@@ -1337,11 +1389,12 @@ interface DashboardProps {
   isDark: boolean;
   onSelectSet: (setId: string) => void;
   onStartSet: (setId: string) => void;
+  progressBySet: Record<string, number>;
   questionSets: QuestionSet[];
   selectedSetId: string | null;
 }
 
-function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
+function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, progressBySet, questionSets, selectedSetId }: DashboardProps) {
   const selectedSet = questionSets.find((s) => s.id === selectedSetId);
 
   return (
@@ -1360,6 +1413,7 @@ function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, se
           {questionSets.map((qs) => {
             const selected = qs.id === selectedSetId;
             const preview = qs.items.slice(0, 6).map((i) => i.kanji).join(' ');
+            const lastMatched = progressBySet[qs.id] ?? 0;
             return (
               <button
                 className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 ${
@@ -1379,6 +1433,7 @@ function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, se
                   <span className={`rounded-full px-3 py-1 text-xs font-bold ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{qs.items.length}</span>
                 </div>
                 <p className={`text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>{qs.description}</p>
+                <span className={`mt-4 inline-flex rounded-full border px-3 py-1 text-xs font-bold ${isDark ? 'border-amber-700/60 bg-amber-950/40 text-amber-200' : 'border-red-200 bg-red-50 text-red-800'}`}>{lastMatched}/{qs.items.length} matched last run</span>
                 <p className={`mt-5 text-3xl font-semibold tracking-normal ${isDark ? 'text-stone-100' : 'text-stone-900'}`}>{preview}</p>
               </button>
             );
@@ -1427,6 +1482,7 @@ interface GameBoardProps {
   onKanjiSelect: (id: number) => void;
   onMeaningSelect: (id: number) => void;
   onReset: () => void;
+  onShuffle: () => void;
   remaining: number;
   selectedKanji: KanjiData | undefined;
   selectedKanjiId: number | null;
@@ -1438,7 +1494,7 @@ interface GameBoardProps {
 
 function GameBoard({
   bestTime, elapsedSeconds, isComplete, isDark, isError, matchedIds, mistakes,
-  onKanjiSelect, onMeaningSelect, onReset, remaining,
+  onKanjiSelect, onMeaningSelect, onReset, onShuffle, remaining,
   selectedKanji, selectedKanjiId, selectedMeaningId, selectedSet,
   shuffledKanji, shuffledMeanings,
 }: GameBoardProps) {
@@ -1453,16 +1509,28 @@ function GameBoard({
                 {remaining === 0 ? 'Board complete.' : `${remaining} remaining in ${selectedSet.title}`}
               </p>
             </div>
-            <button
-              onClick={onReset}
-              className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${
-                isDark ? 'border-amber-700 bg-amber-600 text-stone-950 hover:bg-amber-500' : 'border-stone-200 bg-stone-950 text-white hover:bg-stone-800'
-              }`}
-              type="button"
-            >
-              <RotateCcw size={17} />
-              Reset
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={onShuffle}
+                className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${
+                  isDark ? 'border-stone-700 bg-stone-950 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'
+                }`}
+                type="button"
+              >
+                <RefreshCw size={17} />
+                Shuffle
+              </button>
+              <button
+                onClick={onReset}
+                className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${
+                  isDark ? 'border-amber-700 bg-amber-600 text-stone-950 hover:bg-amber-500' : 'border-stone-200 bg-stone-950 text-white hover:bg-stone-800'
+                }`}
+                type="button"
+              >
+                <RotateCcw size={17} />
+                Reset
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3 md:gap-5">
             <KanjiColumn isDark={isDark} isError={isError} items={shuffledKanji} matchedIds={matchedIds} onSelect={onKanjiSelect} selectedId={selectedKanjiId} />
@@ -1536,7 +1604,12 @@ function PaperPracticeDashboard({
   studiedCount, wrongIds,
 }: PaperPracticeDashboardProps) {
   const paperListings = QUESTION_PAPER_LISTINGS;
-  const openedListing = getPaperListing(selectedPaperId) ?? paperListings[0];
+  const [paperDashboardSearch, setPaperDashboardSearch] = useState('');
+  const [paperKindFilter, setPaperKindFilter] = useState<'all' | PaperKind>('all');
+  const [studiedDelta, setStudiedDelta] = useState(0);
+  const previousStudiedRef = useRef(studiedCount);
+  const isAggregate = selectedPaperId === ALL_PAPERS_ID;
+  const openedListing = isAggregate ? undefined : getPaperListing(selectedPaperId) ?? paperListings[0];
   const sections = getPaperSectionsForScope(selectedPaperId);
   const selectedQuestions = getQuestionsForScope(selectedPaperId, selectedSection);
   const reviewCount = selectedQuestions.filter((q) => reviewIds.has(q.id)).length;
@@ -1549,6 +1622,28 @@ function PaperPracticeDashboard({
   const totalPapers = paperListings.length;
   const totalQuestions = paperListings.reduce((sum, l) => sum + l.questions.length, 0);
   const totalReviewable = paperListings.reduce((sum, l) => sum + l.questions.filter((q) => reviewIds.has(q.id)).length, 0);
+  const filteredPaperListings = paperListings.filter((listing) => {
+    const needle = paperDashboardSearch.trim().toLowerCase();
+    const matchesSearch = !needle || `${listing.title} ${listing.subtitle ?? ''} ${listing.description}`.toLowerCase().includes(needle);
+    const matchesKind = paperKindFilter === 'all' || classifyPaper(listing) === paperKindFilter;
+    return matchesSearch && matchesKind;
+  });
+  const topReviewed = [...paperListings]
+    .map((listing) => ({ listing, count: listing.questions.filter((q) => reviewIds.has(q.id)).length }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+
+  useEffect(() => {
+    const previous = previousStudiedRef.current;
+    if (studiedCount > previous) {
+      setStudiedDelta(studiedCount - previous);
+      const id = window.setTimeout(() => setStudiedDelta(0), 1600);
+      previousStudiedRef.current = studiedCount;
+      return () => window.clearTimeout(id);
+    }
+    previousStudiedRef.current = studiedCount;
+    return undefined;
+  }, [studiedCount]);
 
   return (
     <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -1569,12 +1664,34 @@ function PaperPracticeDashboard({
             View questions
           </button>
         </div>
+        <div className={`relative mb-4 flex flex-col gap-3 rounded-2xl border p-3 ${isDark ? 'border-stone-800 bg-stone-950/60' : 'border-stone-200 bg-stone-50'}`}>
+          <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${isDark ? 'border-stone-700 bg-stone-950' : 'border-stone-200 bg-white'}`}>
+            <Search size={15} className={isDark ? 'text-stone-500' : 'text-stone-400'} />
+            <input className={`min-w-0 flex-1 bg-transparent text-sm outline-none ${isDark ? 'text-stone-100 placeholder:text-stone-500' : 'text-stone-900 placeholder:text-stone-400'}`} onChange={(event) => setPaperDashboardSearch(event.target.value)} placeholder="Search papers" value={paperDashboardSearch} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'see', label: 'SEE' },
+              { id: 'midsem', label: 'Mid-sem' },
+              { id: 'pretest', label: 'Pre-test' },
+              { id: 'pattern', label: 'Patterns' },
+            ].map((chip) => (
+              <button className={`rounded-full px-3 py-1 text-xs font-bold transition ${paperKindFilter === chip.id ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : isDark ? 'bg-stone-800 text-stone-300 hover:bg-stone-700' : 'bg-white text-stone-600 hover:bg-stone-100'}`} key={chip.id} onClick={() => setPaperKindFilter(chip.id as 'all' | PaperKind)} type="button">
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="relative grid gap-3 sm:grid-cols-2">
-          {paperListings.map((listing) => (
+          {filteredPaperListings.map((listing) => (
             <Fragment key={listing.id}>
               <PaperListingCard isDark={isDark} listing={listing} onSelect={() => onSelectPaper(listing.id)} reviewIds={reviewIds} selected={selectedPaperId === listing.id} wrongIds={wrongIds} />
             </Fragment>
           ))}
+          {filteredPaperListings.length === 0 && (
+            <p className={`rounded-xl border p-5 text-center text-sm ${isDark ? 'border-stone-800 bg-stone-950 text-stone-400' : 'border-stone-200 bg-white text-stone-500'}`}>No papers match the current filters.</p>
+          )}
         </div>
       </div>
 
@@ -1585,11 +1702,11 @@ function PaperPracticeDashboard({
             <div className={`grid h-12 w-12 place-items-center rounded-xl shadow-sm ${isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'}`}><BarChart3 size={22} /></div>
             <div className="min-w-0 flex-1">
               <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Opened paper</p>
-              <h2 className={`mt-1 truncate text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{openedListing?.title ?? getPaperLabel(selectedPaperId)}</h2>
-              {openedListing?.subtitle && (<p className={`mt-0.5 truncate text-[0.72rem] font-semibold uppercase tracking-[0.08em] ${isDark ? 'text-amber-300/80' : 'text-red-700/80'}`}>{openedListing.subtitle}</p>)}
+              <h2 className={`mt-1 truncate text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{isAggregate ? 'All question papers' : openedListing?.title ?? getPaperLabel(selectedPaperId)}</h2>
+              {isAggregate ? (<p className={`mt-0.5 truncate text-[0.72rem] font-semibold uppercase tracking-[0.08em] ${isDark ? 'text-amber-300/80' : 'text-red-700/80'}`}>Aggregate practice scope</p>) : openedListing?.subtitle && (<p className={`mt-0.5 truncate text-[0.72rem] font-semibold uppercase tracking-[0.08em] ${isDark ? 'text-amber-300/80' : 'text-red-700/80'}`}>{openedListing.subtitle}</p>)}
             </div>
           </div>
-          {openedListing?.description && (<p className={`mt-3 text-sm leading-6 ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>{openedListing.description}</p>)}
+          {isAggregate ? (<p className={`mt-3 text-sm leading-6 ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>All curated papers combined into one review and test scope.</p>) : openedListing?.description && (<p className={`mt-3 text-sm leading-6 ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>{openedListing.description}</p>)}
 
           <div className="mt-5 grid grid-cols-2 gap-2">
             <MiniMetric isDark={isDark} label="Questions" tone="neutral" value={String(selectedQuestions.length)} />
@@ -1604,9 +1721,9 @@ function PaperPracticeDashboard({
               <span className="tabular-nums">{progressPercent}%</span>
             </div>
             <div className={`mt-1.5 h-2 overflow-hidden rounded-full ${isDark ? 'bg-stone-800' : 'bg-stone-200'}`}>
-              <div className={`h-full rounded-full transition-[width] duration-500 ease-out ${isDark ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-600 to-red-700'}`} style={{ width: `${progressPercent}%` }} />
+              <motion.div animate={{ width: `${progressPercent}%` }} className={`h-full rounded-full ${isDark ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-600 to-red-700'}`} initial={false} transition={{ duration: 0.4, ease: 'easeOut' }} />
             </div>
-            <p className={`mt-2 truncate text-xs font-medium ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>{studiedCount}/{selectedQuestions.length} reviewed · {selectedSectionTitle}</p>
+            <p className={`mt-2 truncate text-xs font-medium ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>{studiedCount}/{selectedQuestions.length} reviewed · {selectedSectionTitle}{studiedDelta > 0 ? ` (+${studiedDelta} reviewed)` : ''}</p>
           </div>
 
           <div className="mt-5 grid gap-2">
@@ -1623,7 +1740,22 @@ function PaperPracticeDashboard({
             <button className={`mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 ${isDark ? 'border-amber-700/70 bg-amber-950/40 text-amber-200 hover:bg-amber-950/60' : 'border-red-200 bg-red-50 text-red-800 hover:bg-red-100'}`} disabled={reviewCount === 0} onClick={onReviewOnly} type="button"><Flag size={15} />Practice review-later ({reviewCount})</button>
           </div>
 
-          <div className="mt-6">
+          {isAggregate && (
+            <div className={`mt-6 rounded-2xl border p-3 ${isDark ? 'border-stone-800 bg-stone-950/60' : 'border-stone-200 bg-stone-50'}`}>
+              <p className={`text-[0.7rem] font-bold uppercase tracking-[0.16em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Aggregate summary</p>
+              <p className={`mt-2 text-sm ${isDark ? 'text-stone-300' : 'text-stone-700'}`}>{totalQuestions} total questions across {totalPapers} curated papers.</p>
+              <div className="mt-3 grid gap-2">
+                {topReviewed.map(({ listing, count }) => (
+                  <div className={`flex items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold ${isDark ? 'bg-stone-900 text-stone-300' : 'bg-white text-stone-700'}`} key={listing.id}>
+                    <span>{listing.title}</span>
+                    <span>{count} reviewed</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!isAggregate && <div className="mt-6">
             <div className="flex items-center justify-between gap-3">
               <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Sections · {sections.length}</p>
               <button className={`rounded-full px-3 py-1 text-[0.7rem] font-bold transition ${selectedSection === 'all' ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : isDark ? 'bg-stone-800 text-stone-300 hover:bg-stone-700' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`} onClick={() => onSectionChange('all')} type="button">Full paper</button>
@@ -1652,7 +1784,7 @@ function PaperPracticeDashboard({
                 );
               })}
             </div>
-          </div>
+          </div>}
 
           <button className={`mt-5 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-800 bg-stone-950/60 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-100'}`} onClick={() => onSelectPaper(ALL_PAPERS_ID)} type="button"><ListFilter size={15} />All papers aggregate</button>
         </div>
@@ -1769,8 +1901,13 @@ interface PaperLearnModeProps {
 }
 
 function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onToggleReview, question, questions, reviewIds, scopeTitle, studiedCount }: PaperLearnModeProps) {
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
+  const [defaultReveal, setDefaultReveal] = useState(false);
   const isMarked = question ? reviewIds.has(question.id) : false;
   const correct = question?.options.find((o) => o.isCorrect);
+  const answerRevealed = Boolean(question && (defaultReveal || revealedIds.has(question.id)));
+  const previousPreview = questions[currentIndex - 1];
+  const nextPreview = questions[currentIndex + 1];
   if (!question) {
     return (
       <section className={`rounded-2xl border p-8 text-center shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}>
@@ -1787,8 +1924,16 @@ function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onT
         <span className={`rounded-full px-3 py-1 text-xs font-bold tabular-nums ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{currentIndex + 1} / {questions.length}</span>
         <span className={`text-xs ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Reviewed {studiedCount}/{questions.length}</span>
         <div className="ml-auto flex flex-wrap gap-2">
+          <label className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-bold ${isDark ? 'border-stone-700 bg-stone-950 text-stone-300' : 'border-stone-200 bg-white text-stone-700'}`}>
+            <input checked={defaultReveal} className="accent-current" onChange={(event) => setDefaultReveal(event.target.checked)} type="checkbox" />
+            Default reveal
+          </label>
+          <button onClick={() => question && setRevealedIds((prev) => new Set(prev).add(question.id))} className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition ${answerRevealed ? isDark ? 'border-emerald-700 bg-emerald-950/50 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-800' : isDark ? 'border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-100'}`} type="button">
+            <Eye size={13} />
+            {answerRevealed ? 'Answer shown' : 'Show answer'}
+          </button>
           <button onClick={() => onToggleReview(question.id)} className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition ${isMarked ? isDark ? 'border-amber-500 bg-amber-950/50 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-800' : isDark ? 'border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-100'}`} type="button"><Flag size={13} /> {isMarked ? 'Marked' : 'Mark for review'}</button>
-          <button onClick={onStartTest} className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition ${isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400' : 'bg-red-700 text-white hover:bg-red-800'}`} type="button"><ClipboardList size={13} /> Test these</button>
+          <button onClick={onStartTest} className={`sticky bottom-3 z-20 inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition sm:static ${isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400' : 'bg-red-700 text-white hover:bg-red-800'}`} type="button"><ClipboardList size={13} /> Test these</button>
         </div>
       </div>
       <article className={`rounded-2xl border p-5 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/85' : 'border-stone-200 bg-white/90'}`}>
@@ -1802,22 +1947,32 @@ function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onT
         {question.options.length > 0 && (
           <ul className="mt-4 grid gap-2 sm:grid-cols-2">
             {question.options.map((option) => (
-              <li key={option.id} className={`rounded-xl border p-3 text-sm ${option.isCorrect ? isDark ? 'border-emerald-700 bg-emerald-950/40 text-emerald-100' : 'border-emerald-300 bg-emerald-50 text-emerald-900' : isDark ? 'border-stone-800 bg-stone-950/60 text-stone-200' : 'border-stone-200 bg-white text-stone-800'}`}>
+              <li key={option.id} className={`rounded-xl border p-3 text-sm ${answerRevealed && option.isCorrect ? isDark ? 'border-emerald-700 bg-emerald-950/40 text-emerald-100' : 'border-emerald-300 bg-emerald-50 text-emerald-900' : isDark ? 'border-stone-800 bg-stone-950/60 text-stone-200' : 'border-stone-200 bg-white text-stone-800'}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium leading-5">{option.text}</span>
-                  {option.isCorrect && <CheckCircle2 size={16} className={isDark ? 'text-emerald-300' : 'text-emerald-700'} />}
+                  {answerRevealed && option.isCorrect && <CheckCircle2 size={16} className={isDark ? 'text-emerald-300' : 'text-emerald-700'} />}
                 </div>
               </li>
             ))}
           </ul>
         )}
-        {(question.explanation.length > 0 || correct) && (
+        {answerRevealed && (question.explanation.length > 0 || correct) && (
           <div className={`mt-4 rounded-xl p-3 text-sm leading-6 ${isDark ? 'bg-stone-800/50 text-stone-300' : 'bg-stone-100 text-stone-700'}`}>
             {correct && <p className={`mb-2 text-[0.72rem] font-bold uppercase tracking-[0.16em] ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Answer · {correct.text}</p>}
             {question.explanation.map((line, idx) => (<p key={idx} className="mt-1">{line}</p>))}
           </div>
         )}
       </article>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <button onClick={() => onMove(-1)} disabled={!previousPreview} className={`rounded-xl border p-3 text-left text-xs transition disabled:opacity-45 ${isDark ? 'border-stone-800 bg-stone-950/50 text-stone-400 hover:border-stone-600' : 'border-stone-200 bg-white text-stone-500 hover:border-stone-400'}`} type="button">
+          <span className="block font-bold uppercase tracking-[0.14em]">Previous preview</span>
+          <span className="mt-1 block truncate">{previousPreview ? `${previousPreview.number} ${previousPreview.prompt}` : 'Start of section'}</span>
+        </button>
+        <button onClick={() => onMove(1)} disabled={!nextPreview} className={`rounded-xl border p-3 text-left text-xs transition disabled:opacity-45 ${isDark ? 'border-stone-800 bg-stone-950/50 text-stone-400 hover:border-stone-600' : 'border-stone-200 bg-white text-stone-500 hover:border-stone-400'}`} type="button">
+          <span className="block font-bold uppercase tracking-[0.14em]">Next preview</span>
+          <span className="mt-1 block truncate">{nextPreview ? `${nextPreview.number} ${nextPreview.prompt}` : 'End of section'}</span>
+        </button>
+      </div>
       <div className="flex items-center justify-between gap-3">
         <button onClick={() => onMove(-1)} disabled={currentIndex === 0} className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold transition disabled:opacity-50 ${isDark ? 'border-stone-700 bg-stone-950 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} type="button"><ChevronLeft size={16} /> Previous</button>
         <p className={`text-xs font-semibold ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>← / → to navigate</p>
@@ -1829,31 +1984,50 @@ function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onT
 
 interface PaperTestModeProps {
   answers: Record<string, string>;
+  confirmSubmitOpen: boolean;
   currentIndex: number;
   elapsedSeconds: number;
   isDark: boolean;
   onAnswer: (questionId: string, optionId: string) => void;
   onBack: () => void;
+  onCancelSubmit: () => void;
+  onConfirmSubmit: () => void;
   onFinish: () => void;
   onJump: (index: number) => void;
   onMove: (direction: -1 | 1) => void;
   question: PaperQuestion | undefined;
   questions: PaperQuestion[];
+  reviewIds: Set<string>;
   scopeTitle: string;
 }
 
-function PaperTestMode({ answers, currentIndex, elapsedSeconds, isDark, onAnswer, onBack, onFinish, onJump, onMove, question, questions, scopeTitle }: PaperTestModeProps) {
+function PaperTestMode({ answers, confirmSubmitOpen, currentIndex, elapsedSeconds, isDark, onAnswer, onBack, onCancelSubmit, onConfirmSubmit, onFinish, onJump, onMove, question, questions, reviewIds, scopeTitle }: PaperTestModeProps) {
   if (!question) {
     return (<section className={`rounded-2xl border p-8 text-center shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}><p>No questions available.</p><button onClick={onBack} className="mt-4" type="button">Back</button></section>);
   }
   const answered = answers[question.id];
+  const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
+  const unansweredCount = questions.length - answeredCount;
   return (
     <section className="grid gap-4">
       <div className={`flex flex-wrap items-center gap-3 rounded-2xl border p-3 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}>
         <p className={`text-[0.72rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>{scopeTitle}</p>
         <span className={`rounded-full px-3 py-1 text-xs font-bold tabular-nums ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{currentIndex + 1} / {questions.length}</span>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold tabular-nums ${isDark ? 'bg-emerald-950/60 text-emerald-200' : 'bg-emerald-50 text-emerald-800'}`}>{answeredCount} / {questions.length} answered</span>
         <span className={`inline-flex items-center gap-1 text-xs font-semibold tabular-nums ${isDark ? 'text-stone-400' : 'text-stone-500'}`}><Clock3 size={13} /> {formatTime(elapsedSeconds)}</span>
-        <button onClick={onFinish} className={`ml-auto inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold ${isDark ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400' : 'bg-emerald-700 text-white hover:bg-emerald-800'}`} type="button"><CheckCircle2 size={13} /> Submit</button>
+        <div className="relative ml-auto">
+          <button onClick={onFinish} className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold ${isDark ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400' : 'bg-emerald-700 text-white hover:bg-emerald-800'}`} type="button"><CheckCircle2 size={13} /> Submit</button>
+          {confirmSubmitOpen && (
+            <div className={`absolute right-0 top-11 z-20 w-72 rounded-2xl border p-3 text-sm shadow-xl ${isDark ? 'border-amber-700 bg-stone-950 text-stone-100' : 'border-red-200 bg-white text-stone-900'}`}>
+              <p className="font-bold">Submit with {unansweredCount} unanswered?</p>
+              <p className={`mt-1 text-xs ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>Unanswered questions will stay out of the score.</p>
+              <div className="mt-3 flex justify-end gap-2">
+                <button className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${isDark ? 'border-stone-700 text-stone-300' : 'border-stone-200 text-stone-700'}`} onClick={onCancelSubmit} type="button">Cancel</button>
+                <button className={`rounded-lg px-3 py-1.5 text-xs font-bold ${isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'}`} onClick={onConfirmSubmit} type="button">Submit anyway</button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
       <article className={`rounded-2xl border p-5 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/85' : 'border-stone-200 bg-white/90'}`}>
         <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>{question.sectionTitle.replace(/^[^\p{L}\p{N}]+/u, '').trim() || 'Section'}</p>
@@ -1869,11 +2043,16 @@ function PaperTestMode({ answers, currentIndex, elapsedSeconds, isDark, onAnswer
       </article>
       <div className="flex items-center justify-between gap-3">
         <button onClick={() => onMove(-1)} disabled={currentIndex === 0} className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold transition disabled:opacity-50 ${isDark ? 'border-stone-700 bg-stone-950 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} type="button"><ChevronLeft size={16} /> Previous</button>
-        <div className="flex flex-wrap items-center gap-1">
-          {questions.slice(0, 20).map((q, i) => (
-            <button key={q.id} onClick={() => onJump(i)} className={`h-6 w-6 rounded text-[0.65rem] font-bold tabular-nums transition ${i === currentIndex ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : answers[q.id] ? isDark ? 'bg-emerald-900/60 text-emerald-200' : 'bg-emerald-100 text-emerald-800' : isDark ? 'bg-stone-800 text-stone-400 hover:bg-stone-700' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`} type="button">{i + 1}</button>
-          ))}
-          {questions.length > 20 && <span className={`text-xs ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>+{questions.length - 20}</span>}
+        <div className="flex max-w-[56vw] snap-x items-center gap-1 overflow-x-auto px-1 py-1 sm:max-w-lg">
+          {questions.map((q, i) => {
+            const isReview = reviewIds.has(q.id);
+            return (
+              <button key={q.id} onClick={() => onJump(i)} className={`relative h-8 w-8 shrink-0 snap-start rounded-lg text-[0.7rem] font-bold tabular-nums transition ${i === currentIndex ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : answers[q.id] ? isDark ? 'bg-emerald-900/60 text-emerald-200' : 'bg-emerald-100 text-emerald-800' : isDark ? 'bg-stone-800 text-stone-400 hover:bg-stone-700' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`} type="button">
+                {i + 1}
+                {isReview && <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full ${isDark ? 'bg-amber-200' : 'bg-amber-500'}`} />}
+              </button>
+            );
+          })}
         </div>
         <button onClick={() => onMove(1)} disabled={currentIndex >= questions.length - 1} className={`inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:opacity-50 ${isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400' : 'bg-red-700 text-white hover:bg-red-800'}`} type="button">Next <ChevronRight size={16} /></button>
       </div>
@@ -1941,6 +2120,19 @@ interface PaperQuestionBrowserProps {
 }
 
 function PaperQuestionBrowser({ answeredIds, filter, isDark, onBack, onFilterChange, onOpenLearn, onSearchChange, onToggleReview, questions, reviewIds, scopeTitle, search, wrongIds }: PaperQuestionBrowserProps) {
+  const [rangeFilter, setRangeFilter] = useState('all');
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const mcqLike = questions.filter((q) => q.options.length > 0).length >= Math.max(3, Math.floor(questions.length * 0.7));
+  const chunkSize = mcqLike ? 5 : 10;
+  const rangeChips = useMemo(() => {
+    if (questions.length <= chunkSize) return [{ id: 'all', label: 'All', start: 0, end: questions.length - 1 }];
+    const chips = [{ id: 'all', label: 'All', start: 0, end: questions.length - 1 }];
+    for (let start = 0; start < questions.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, questions.length - 1);
+      chips.push({ id: `${start}-${end}`, label: `Q${start + 1}-Q${end + 1}`, start, end });
+    }
+    return chips;
+  }, [chunkSize, questions.length]);
   const filtered = questions.map((q, i) => ({ q, i })).filter(({ q }) => {
     if (filter === 'unanswered' && answeredIds.has(q.id)) return false;
     if (filter === 'wrong' && !wrongIds.has(q.id)) return false;
@@ -1949,8 +2141,35 @@ function PaperQuestionBrowser({ answeredIds, filter, isDark, onBack, onFilterCha
       const needle = search.trim().toLowerCase();
       if (!(q.prompt.toLowerCase().includes(needle) || q.number.toLowerCase().includes(needle))) return false;
     }
+    const selectedRange = rangeChips.find((chip) => chip.id === rangeFilter);
+    if (selectedRange && rangeFilter !== 'all') {
+      const index = questions.findIndex((candidate) => candidate.id === q.id);
+      if (index < selectedRange.start || index > selectedRange.end) return false;
+    }
     return true;
   });
+
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [filter, rangeFilter, search, questions.length]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (isEditableKeyboardTarget(event.target)) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setHighlightedIndex((index) => Math.min(index + 1, Math.max(filtered.length - 1, 0)));
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setHighlightedIndex((index) => Math.max(index - 1, 0));
+      } else if (event.key === 'Enter' && filtered[highlightedIndex]) {
+        event.preventDefault();
+        onOpenLearn(filtered[highlightedIndex].i);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [filtered, highlightedIndex, onOpenLearn]);
   return (
     <section className="grid gap-4">
       <div className={`flex flex-wrap items-center gap-3 rounded-2xl border p-3 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}>
@@ -1967,13 +2186,20 @@ function PaperQuestionBrowser({ answeredIds, filter, isDark, onBack, onFilterCha
           <button key={f} onClick={() => onFilterChange(f)} className={`rounded-full px-3 py-1 text-xs font-bold capitalize transition ${filter === f ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : isDark ? 'bg-stone-800 text-stone-300 hover:bg-stone-700' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`} type="button">{f}</button>
         ))}
       </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {rangeChips.map((chip) => (
+          <button key={chip.id} onClick={() => setRangeFilter(chip.id)} className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold transition ${rangeFilter === chip.id ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : isDark ? 'bg-stone-800 text-stone-300 hover:bg-stone-700' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`} type="button">
+            {chip.label}
+          </button>
+        ))}
+      </div>
       <div className="grid gap-2">
-        {filtered.map(({ q, i }) => {
+        {filtered.map(({ q, i }, rowIndex) => {
           const correct = q.options.find((o) => o.isCorrect);
           const isReview = reviewIds.has(q.id);
           const isWrong = wrongIds.has(q.id);
           return (
-            <button key={q.id} onClick={() => onOpenLearn(i)} className={`group rounded-xl border p-3 text-left transition hover:-translate-y-0.5 ${isDark ? 'border-stone-800 bg-stone-950/60 hover:border-stone-600' : 'border-stone-200 bg-white hover:border-stone-400'}`} type="button">
+            <button key={q.id} onClick={() => onOpenLearn(i)} className={`group rounded-xl border p-3 text-left transition hover:-translate-y-0.5 ${rowIndex === highlightedIndex ? isDark ? 'border-amber-500 bg-amber-950/30' : 'border-red-700 bg-red-50' : isDark ? 'border-stone-800 bg-stone-950/60 hover:border-stone-600' : 'border-stone-200 bg-white hover:border-stone-400'}`} type="button">
               <div className="flex items-start gap-3">
                 <span className={`mt-0.5 shrink-0 rounded-md px-2 py-0.5 text-[0.65rem] font-bold tabular-nums ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{q.number}</span>
                 <div className="min-w-0 flex-1">
