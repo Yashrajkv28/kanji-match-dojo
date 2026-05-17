@@ -13,6 +13,7 @@ https://kanji-matcher-challenge.vercel.app
 - Deck dashboard for selecting the active question set.
 - One built-in starter deck with 22 beginner kanji.
 - Future-ready question set structure for adding more decks.
+- Learn-first module with mnemonic hints, shape clues, readings, categories, and per-session study progress.
 - Exam-style matching with no reading hints on active prompts or answers.
 - Correct pairs disappear from both columns.
 - Match count, miss count, accuracy, timer, and per-deck best time.
@@ -79,8 +80,11 @@ Question sets live in `src/App.tsx` inside `QUESTION_SETS`. Add another object w
   id: 23,
   kanji: '中',
   meaning: 'Middle',
-  reading: 'naka'
+  reading: 'naka',
+  category: 'Position',
+  hint: 'A line going straight through the middle of a box.',
+  shapeHint: 'Find the box first, then notice the center line.'
 }
 ```
 
-The dashboard and matcher will pick it up automatically.
+The dashboard, learning module, and matcher will pick it up automatically.

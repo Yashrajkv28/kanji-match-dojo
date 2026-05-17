@@ -23,14 +23,5 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  },
-  "include": [
-    "src",
-    "vite.config.ts"
-  ],
-  "exclude": [
-    "dist",
-    "matchmaster",
-    "node_modules"
-  ]
+  }
 }

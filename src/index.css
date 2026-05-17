@@ -6,7 +6,13 @@ body,
   min-height: 100%;
 }
 
+html {
+  background: #f6f4ef;
+  overscroll-behavior-y: none;
+}
+
 body {
   margin: 0;
-  background: #12110f;
+  background: #f6f4ef;
+  overscroll-behavior-y: none;
 }

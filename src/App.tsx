@@ -2,19 +2,45 @@ import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } f
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
+  ArrowRight,
   Award,
+  BarChart3,
+  BookMarked,
   BookOpen,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList,
   Clock3,
+  Eye,
+  Flag,
   Languages,
   Layers3,
+  ListFilter,
   Moon,
   Play,
   RotateCcw,
+  Search,
   Sparkles,
   Sun,
   Target,
   XCircle,
 } from 'lucide-react';
+import {
+  QUESTION_PAPERS,
+  type PaperQuestion,
+  type QuestionPaper,
+} from './data/questionPapers';
+import {
+  CURATED_PAPERS,
+  getCuratedPaper,
+  type CuratedPaper,
+  type CuratedPaperSection,
+} from './data/questionPaperGroups';
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Kanji deck data (existing HEAD baseline)
+   ─────────────────────────────────────────────────────────────────────────── */
 
 interface KanjiData {
   id: number;
@@ -68,10 +94,37 @@ const QUESTION_SETS: QuestionSet[] = [
   },
 ];
 
-const THEME_KEY = 'kanji-matcher-theme';
+/* ─────────────────────────────────────────────────────────────────────────────
+   Storage + view types
+   ─────────────────────────────────────────────────────────────────────────── */
 
-type AppView = 'dashboard' | 'game';
+const THEME_KEY = 'kanji-matcher-theme';
+const PAPER_PROGRESS_KEY = 'kanji-match-dojo-paper-practice:v1';
+const ALL_PAPERS_ID = 'all-papers';
+
+type KanjiAppView = 'dashboard' | 'game';
+type PaperAppView = 'paper-dashboard' | 'paper-learn' | 'paper-test' | 'paper-results' | 'paper-browser';
+type AppView = KanjiAppView | PaperAppView;
+type AppMode = 'kanji' | 'papers';
 type Theme = 'light' | 'dark';
+type PaperFilter = 'all' | 'unanswered' | 'wrong' | 'review';
+
+type PaperListingSection = CuratedPaperSection;
+type PaperListing = CuratedPaper;
+
+interface PaperProgressState {
+  studiedByScope: Record<string, number>;
+  reviewIds: string[];
+  wrongIds: string[];
+  answeredIds: string[];
+}
+
+const QUESTION_PAPER_LISTINGS: PaperListing[] = CURATED_PAPERS;
+const DEFAULT_PAPER_ID = QUESTION_PAPER_LISTINGS[0]?.id ?? ALL_PAPERS_ID;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Helpers
+   ─────────────────────────────────────────────────────────────────────────── */
 
 function shuffle<T>(array: T[]): T[] {
   const newArray = [...array];
@@ -88,12 +141,21 @@ function formatTime(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+function clampIndex(index: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.min(Math.max(index, 0), total - 1);
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName);
+}
+
 function getInitialTheme(): Theme {
   const storedTheme = window.localStorage.getItem(THEME_KEY);
   if (storedTheme === 'dark' || storedTheme === 'light') {
     return storedTheme;
   }
-
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -101,8 +163,93 @@ function getBestTimeKey(setId: string): string {
   return `kanji-matcher-best-time:${setId}`;
 }
 
+function getDefaultPaperProgress(): PaperProgressState {
+  return { studiedByScope: {}, reviewIds: [], wrongIds: [], answeredIds: [] };
+}
+
+function getInitialPaperProgress(): PaperProgressState {
+  const stored = window.localStorage.getItem(PAPER_PROGRESS_KEY);
+  if (!stored) return getDefaultPaperProgress();
+  try {
+    const parsed = JSON.parse(stored);
+    return {
+      studiedByScope: typeof parsed.studiedByScope === 'object' && parsed.studiedByScope !== null ? parsed.studiedByScope : {},
+      reviewIds: Array.isArray(parsed.reviewIds) ? parsed.reviewIds : [],
+      wrongIds: Array.isArray(parsed.wrongIds) ? parsed.wrongIds : [],
+      answeredIds: Array.isArray(parsed.answeredIds) ? parsed.answeredIds : [],
+    };
+  } catch {
+    return getDefaultPaperProgress();
+  }
+}
+
+function getPaperScopeKey(paperId: string, sectionId: string): string {
+  return `${paperId}:${sectionId}`;
+}
+
+function getPaperListing(paperId: string): PaperListing | undefined {
+  return getCuratedPaper(paperId);
+}
+
+function getPaperSectionsForScope(paperId: string): PaperListingSection[] {
+  if (paperId === ALL_PAPERS_ID) {
+    return QUESTION_PAPER_LISTINGS.map((listing) => ({
+      id: listing.id,
+      title: listing.title,
+      subtitle: listing.subtitle,
+      rawPaperId: listing.id,
+      questions: listing.questions,
+    }));
+  }
+
+  const listing = getPaperListing(paperId);
+  if (listing) return listing.sections;
+
+  const paper = QUESTION_PAPERS.find((candidate) => candidate.id === paperId);
+  if (!paper) return [];
+  return paper.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    rawPaperId: paper.id,
+    rawSectionId: section.id,
+    questions: paper.questions.filter((q) => q.sectionId === section.id || q.sectionTitle === section.title),
+  }));
+}
+
+function getQuestionsForScope(paperId: string, sectionId: string): PaperQuestion[] {
+  if (paperId === ALL_PAPERS_ID) {
+    if (sectionId === 'all') return QUESTION_PAPERS.flatMap((p) => p.questions);
+    const agg = QUESTION_PAPER_LISTINGS.find((l) => l.id === sectionId);
+    return agg ? agg.questions : QUESTION_PAPERS.flatMap((p) => p.questions);
+  }
+  const listing = getPaperListing(paperId);
+  const questions = listing?.questions ?? QUESTION_PAPERS.find((p) => p.id === paperId)?.questions ?? [];
+  if (sectionId === 'all') return questions;
+  const section = getPaperSectionsForScope(paperId).find((c) => c.id === sectionId || c.title === sectionId);
+  if (section) return section.questions;
+  return questions.filter((q) => q.sectionTitle === sectionId || q.sectionId === sectionId);
+}
+
+function getPaperLabel(paperId: string): string {
+  if (paperId === ALL_PAPERS_ID) return 'All question papers';
+  return getPaperListing(paperId)?.title ?? QUESTION_PAPERS.find((p) => p.id === paperId)?.title ?? 'Question paper';
+}
+
+function getSectionLabel(paperId: string, sectionId: string): string {
+  if (sectionId === 'all') return 'Full paper';
+  const section = getPaperSectionsForScope(paperId).find((s) => s.id === sectionId || s.title === sectionId);
+  return section?.title ?? 'Selected section';
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   App component
+   ─────────────────────────────────────────────────────────────────────────── */
+
 export default function App() {
   const [appView, setAppView] = useState<AppView>('dashboard');
+  const [appMode, setAppMode] = useState<AppMode>('kanji');
+
+  // Kanji game state (preserved from HEAD)
   const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
   const [shuffledKanji, setShuffledKanji] = useState<KanjiData[]>([]);
   const [shuffledMeanings, setShuffledMeanings] = useState<KanjiData[]>([]);
@@ -116,11 +263,19 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [showSplash, setShowSplash] = useState(true);
 
+  // Paper-practice state
+  const [paperProgress, setPaperProgress] = useState<PaperProgressState>(getInitialPaperProgress);
+  const [selectedPaperId, setSelectedPaperId] = useState<string>(DEFAULT_PAPER_ID);
+  const [selectedPaperSection, setSelectedPaperSection] = useState<string>('all');
+  const [paperQuestionSet, setPaperQuestionSet] = useState<PaperQuestion[]>(() => getQuestionsForScope(DEFAULT_PAPER_ID, 'all'));
+  const [paperQuestionIndex, setPaperQuestionIndex] = useState(0);
+  const [paperAnswers, setPaperAnswers] = useState<Record<string, string>>({});
+  const [paperElapsedSeconds, setPaperElapsedSeconds] = useState(0);
+  const [paperBrowserFilter, setPaperBrowserFilter] = useState<PaperFilter>('all');
+  const [paperSearch, setPaperSearch] = useState('');
+
   const isDark = theme === 'dark';
-  const selectedSet = useMemo(
-    () => QUESTION_SETS.find((set) => set.id === selectedSetId),
-    [selectedSetId],
-  );
+  const selectedSet = useMemo(() => QUESTION_SETS.find((s) => s.id === selectedSetId), [selectedSetId]);
   const activeSet = selectedSet ?? QUESTION_SETS[0];
   const totalQuestions = activeSet.items.length;
   const isComplete = matchedIds.size === totalQuestions;
@@ -129,10 +284,20 @@ export default function App() {
   const remaining = totalQuestions - matchedIds.size;
 
   const selectedKanji = useMemo(
-    () => activeSet.items.find((item) => item.id === selectedKanjiId),
+    () => activeSet.items.find((i) => i.id === selectedKanjiId),
     [activeSet.items, selectedKanjiId],
   );
 
+  // Derived sets for paper progress
+  const reviewIds = useMemo(() => new Set(paperProgress.reviewIds), [paperProgress.reviewIds]);
+  const wrongIds = useMemo(() => new Set(paperProgress.wrongIds), [paperProgress.wrongIds]);
+  const answeredIds = useMemo(() => new Set(paperProgress.answeredIds), [paperProgress.answeredIds]);
+
+  const paperScopeKey = getPaperScopeKey(selectedPaperId, selectedPaperSection);
+  const studiedCount = paperProgress.studiedByScope[paperScopeKey] ?? 0;
+  const currentPaperQuestion = paperQuestionSet[paperQuestionIndex];
+
+  /* ── Kanji game callbacks ── */
   const initGame = useCallback((questionSet: QuestionSet = activeSet) => {
     setShuffledKanji(shuffle(questionSet.items));
     setShuffledMeanings(shuffle(questionSet.items));
@@ -153,10 +318,11 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
-    const splashTimer = window.setTimeout(() => {
-      setShowSplash(false);
-    }, 1100);
+    window.localStorage.setItem(PAPER_PROGRESS_KEY, JSON.stringify(paperProgress));
+  }, [paperProgress]);
 
+  useEffect(() => {
+    const splashTimer = window.setTimeout(() => setShowSplash(false), 1100);
     return () => window.clearTimeout(splashTimer);
   }, []);
 
@@ -165,56 +331,47 @@ export default function App() {
       setBestTime(null);
       return;
     }
-
     const storedBestTime = window.localStorage.getItem(getBestTimeKey(selectedSet.id));
     if (storedBestTime !== null) {
-      const parsedBestTime = Number(storedBestTime);
-      setBestTime(Number.isFinite(parsedBestTime) ? parsedBestTime : null);
+      const parsed = Number(storedBestTime);
+      setBestTime(Number.isFinite(parsed) ? parsed : null);
       return;
     }
-
     setBestTime(null);
   }, [selectedSet]);
 
   useEffect(() => {
-    if (appView !== 'game' || isComplete) {
-      return;
-    }
-
-    const timerId = window.setInterval(() => {
-      setElapsedSeconds((seconds) => seconds + 1);
-    }, 1000);
-
+    if (appView !== 'game' || isComplete) return;
+    const timerId = window.setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
     return () => window.clearInterval(timerId);
   }, [appView, isComplete]);
 
   useEffect(() => {
-    if (!isComplete || appView !== 'game') {
-      return;
-    }
-
-    setBestTime((previousBestTime) => {
-      if (previousBestTime !== null && previousBestTime <= elapsedSeconds) {
-        return previousBestTime;
-      }
-
+    if (!isComplete || appView !== 'game') return;
+    setBestTime((prev) => {
+      if (prev !== null && prev <= elapsedSeconds) return prev;
       window.localStorage.setItem(getBestTimeKey(activeSet.id), String(elapsedSeconds));
       return elapsedSeconds;
     });
   }, [activeSet.id, appView, elapsedSeconds, isComplete]);
 
+  // Paper test timer
+  useEffect(() => {
+    if (appView !== 'paper-test') return;
+    const id = window.setInterval(() => setPaperElapsedSeconds((s) => s + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [appView]);
+
   const finishAttempt = useCallback((kanjiId: number, meaningId: number) => {
     setSelectedKanjiId(kanjiId);
     setSelectedMeaningId(meaningId);
-
     if (kanjiId === meaningId) {
-      setMatchedIds((previousIds) => new Set(previousIds).add(kanjiId));
+      setMatchedIds((prev) => new Set(prev).add(kanjiId));
       setSelectedKanjiId(null);
       setSelectedMeaningId(null);
       return;
     }
-
-    setMistakes((currentMistakes) => currentMistakes + 1);
+    setMistakes((m) => m + 1);
     setIsError(true);
     window.setTimeout(() => {
       setIsError(false);
@@ -224,38 +381,16 @@ export default function App() {
   }, []);
 
   const handleKanjiClick = (id: number) => {
-    if (matchedIds.has(id) || isError) {
-      return;
-    }
-
-    if (selectedKanjiId === id) {
-      setSelectedKanjiId(null);
-      return;
-    }
-
-    if (selectedMeaningId !== null) {
-      finishAttempt(id, selectedMeaningId);
-      return;
-    }
-
+    if (matchedIds.has(id) || isError) return;
+    if (selectedKanjiId === id) { setSelectedKanjiId(null); return; }
+    if (selectedMeaningId !== null) { finishAttempt(id, selectedMeaningId); return; }
     setSelectedKanjiId(id);
   };
 
   const handleMeaningClick = (id: number) => {
-    if (matchedIds.has(id) || isError) {
-      return;
-    }
-
-    if (selectedMeaningId === id) {
-      setSelectedMeaningId(null);
-      return;
-    }
-
-    if (selectedKanjiId !== null) {
-      finishAttempt(selectedKanjiId, id);
-      return;
-    }
-
+    if (matchedIds.has(id) || isError) return;
+    if (selectedMeaningId === id) { setSelectedMeaningId(null); return; }
+    if (selectedKanjiId !== null) { finishAttempt(selectedKanjiId, id); return; }
     setSelectedMeaningId(id);
   };
 
@@ -265,15 +400,127 @@ export default function App() {
   };
 
   const handleStartSet = (setId: string) => {
-    const questionSet = QUESTION_SETS.find((set) => set.id === setId) ?? QUESTION_SETS[0];
-    setSelectedSetId(questionSet.id);
-    initGame(questionSet);
+    const set = QUESTION_SETS.find((s) => s.id === setId) ?? QUESTION_SETS[0];
+    setSelectedSetId(set.id);
+    initGame(set);
     setAppView('game');
   };
 
-  const toggleTheme = () => {
-    setTheme((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'));
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+
+  /* ── Paper-practice callbacks ── */
+  const updatePaperScope = useCallback((paperId: string, sectionId: string) => {
+    const questions = getQuestionsForScope(paperId, sectionId);
+    setSelectedPaperId(paperId);
+    setSelectedPaperSection(sectionId);
+    setPaperQuestionSet(questions);
+    setPaperQuestionIndex(0);
+    return questions;
+  }, []);
+
+  const openPaperLearn = (paperId = selectedPaperId, sectionId = selectedPaperSection, startIndex = 0) => {
+    const questions = updatePaperScope(paperId, sectionId);
+    setPaperQuestionIndex(clampIndex(startIndex, questions.length));
+    setAppView('paper-learn');
   };
+
+  const openPaperBrowser = (paperId = selectedPaperId, sectionId = selectedPaperSection) => {
+    updatePaperScope(paperId, sectionId);
+    setPaperBrowserFilter('all');
+    setPaperSearch('');
+    setAppView('paper-browser');
+  };
+
+  const openPaperTest = (paperId = selectedPaperId, sectionId = selectedPaperSection, questions?: PaperQuestion[]) => {
+    const next = questions ?? updatePaperScope(paperId, sectionId);
+    setPaperQuestionSet(next);
+    setPaperQuestionIndex(0);
+    setPaperAnswers({});
+    setPaperElapsedSeconds(0);
+    setAppView('paper-test');
+  };
+
+  const movePaperQuestion = (direction: -1 | 1) => {
+    setPaperQuestionIndex((prev) => clampIndex(prev + direction, paperQuestionSet.length));
+    setPaperProgress((prev) => {
+      const next = Math.min(prev.studiedByScope[paperScopeKey] ?? 0, paperQuestionSet.length);
+      const newCount = clampIndex(paperQuestionIndex + direction, paperQuestionSet.length);
+      return {
+        ...prev,
+        studiedByScope: {
+          ...prev.studiedByScope,
+          [paperScopeKey]: Math.max(next, newCount + 1),
+        },
+      };
+    });
+  };
+
+  const togglePaperReview = (questionId: string) => {
+    setPaperProgress((prev) => {
+      const has = prev.reviewIds.includes(questionId);
+      return {
+        ...prev,
+        reviewIds: has ? prev.reviewIds.filter((id) => id !== questionId) : [...prev.reviewIds, questionId],
+      };
+    });
+  };
+
+  const submitPaperAnswer = (questionId: string, answer: string) => {
+    setPaperAnswers((prev) => ({ ...prev, [questionId]: answer }));
+  };
+
+  const finishPaperTest = () => {
+    setPaperProgress((prev) => {
+      const newAnswered = new Set(prev.answeredIds);
+      const newWrong = new Set(prev.wrongIds);
+      for (const q of paperQuestionSet) {
+        const given = paperAnswers[q.id];
+        if (given === undefined) continue;
+        newAnswered.add(q.id);
+        const correct = q.options.find((o) => o.isCorrect);
+        if (!correct || given !== correct.id) {
+          newWrong.add(q.id);
+        } else {
+          newWrong.delete(q.id);
+        }
+      }
+      return {
+        ...prev,
+        answeredIds: [...newAnswered],
+        wrongIds: [...newWrong],
+      };
+    });
+    setAppView('paper-results');
+  };
+
+  const openReviewOnly = () => {
+    const flagged = paperQuestionSet.filter((q) => reviewIds.has(q.id));
+    if (flagged.length === 0) return;
+    setPaperQuestionSet(flagged);
+    setPaperQuestionIndex(0);
+    setAppView('paper-learn');
+  };
+
+  /* ── Keyboard nav for paper-learn ── */
+  useEffect(() => {
+    if (appView !== 'paper-learn') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isEditableKeyboardTarget(e.target)) return;
+      if (e.key === 'ArrowRight') { e.preventDefault(); movePaperQuestion(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); movePaperQuestion(-1); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appView, paperQuestionIndex, paperQuestionSet.length, paperScopeKey]);
+
+  const switchMode = (next: AppMode) => {
+    setAppMode(next);
+    setAppView(next === 'kanji' ? 'dashboard' : 'paper-dashboard');
+  };
+
+  /* ── Render ── */
+  const inPaperMode = appMode === 'papers';
 
   return (
     <div className={isDark ? 'min-h-screen bg-[#12110f] text-stone-100' : 'min-h-screen bg-[#f6f4ef] text-stone-900'}>
@@ -283,21 +530,18 @@ export default function App() {
         onClick={appView === 'dashboard' ? () => setSelectedSetId(null) : undefined}
       >
         <AppHeader
+          appMode={appMode}
           appView={appView}
           isDark={isDark}
-          onBackToDashboard={() => setAppView('dashboard')}
+          onBackToDashboard={() => setAppView(inPaperMode ? 'paper-dashboard' : 'dashboard')}
+          onSwitchMode={switchMode}
           onToggleTheme={toggleTheme}
           selectedSet={activeSet}
-          stats={{
-            accuracy,
-            elapsedSeconds,
-            matched: matchedIds.size,
-            mistakes,
-            total: totalQuestions,
-          }}
+          stats={{ accuracy, elapsedSeconds, matched: matchedIds.size, mistakes, total: totalQuestions }}
         />
 
-        {appView === 'dashboard' ? (
+        {/* Kanji mode */}
+        {appView === 'dashboard' && (
           <Dashboard
             bestTime={bestTime}
             isDark={isDark}
@@ -306,7 +550,8 @@ export default function App() {
             questionSets={QUESTION_SETS}
             selectedSetId={selectedSetId}
           />
-        ) : (
+        )}
+        {appView === 'game' && (
           <GameBoard
             bestTime={bestTime}
             elapsedSeconds={elapsedSeconds}
@@ -327,54 +572,157 @@ export default function App() {
             shuffledMeanings={shuffledMeanings}
           />
         )}
+
+        {/* Paper mode */}
+        {appView === 'paper-dashboard' && (
+          <PaperPracticeDashboard
+            answeredIds={answeredIds}
+            isDark={isDark}
+            onBrowse={openPaperBrowser}
+            onLearn={openPaperLearn}
+            onReviewOnly={openReviewOnly}
+            onSectionChange={(sid) => updatePaperScope(selectedPaperId, sid)}
+            onSelectPaper={(pid) => updatePaperScope(pid, 'all')}
+            onStartTest={openPaperTest}
+            reviewIds={reviewIds}
+            selectedPaperId={selectedPaperId}
+            selectedSection={selectedPaperSection}
+            studiedCount={studiedCount}
+            wrongIds={wrongIds}
+          />
+        )}
+        {appView === 'paper-learn' && (
+          <PaperLearnMode
+            currentIndex={paperQuestionIndex}
+            isDark={isDark}
+            onBack={() => setAppView('paper-dashboard')}
+            onMove={movePaperQuestion}
+            onStartTest={() => openPaperTest(selectedPaperId, selectedPaperSection, paperQuestionSet)}
+            onToggleReview={togglePaperReview}
+            question={currentPaperQuestion}
+            questions={paperQuestionSet}
+            reviewIds={reviewIds}
+            scopeTitle={`${getPaperLabel(selectedPaperId)} · ${getSectionLabel(selectedPaperId, selectedPaperSection)}`}
+            studiedCount={studiedCount}
+          />
+        )}
+        {appView === 'paper-test' && (
+          <PaperTestMode
+            answers={paperAnswers}
+            currentIndex={paperQuestionIndex}
+            elapsedSeconds={paperElapsedSeconds}
+            isDark={isDark}
+            onAnswer={submitPaperAnswer}
+            onBack={() => setAppView('paper-dashboard')}
+            onFinish={finishPaperTest}
+            onJump={(i) => setPaperQuestionIndex(clampIndex(i, paperQuestionSet.length))}
+            onMove={(d) => setPaperQuestionIndex((p) => clampIndex(p + d, paperQuestionSet.length))}
+            question={currentPaperQuestion}
+            questions={paperQuestionSet}
+            scopeTitle={`${getPaperLabel(selectedPaperId)} · ${getSectionLabel(selectedPaperId, selectedPaperSection)}`}
+          />
+        )}
+        {appView === 'paper-results' && (
+          <PaperResults
+            answers={paperAnswers}
+            elapsedSeconds={paperElapsedSeconds}
+            isDark={isDark}
+            onBack={() => setAppView('paper-dashboard')}
+            onRetry={() => openPaperTest(selectedPaperId, selectedPaperSection, paperQuestionSet)}
+            questions={paperQuestionSet}
+            scopeTitle={`${getPaperLabel(selectedPaperId)} · ${getSectionLabel(selectedPaperId, selectedPaperSection)}`}
+          />
+        )}
+        {appView === 'paper-browser' && (
+          <PaperQuestionBrowser
+            answeredIds={answeredIds}
+            filter={paperBrowserFilter}
+            isDark={isDark}
+            onBack={() => setAppView('paper-dashboard')}
+            onFilterChange={setPaperBrowserFilter}
+            onOpenLearn={(i) => openPaperLearn(selectedPaperId, selectedPaperSection, i)}
+            onSearchChange={setPaperSearch}
+            onToggleReview={togglePaperReview}
+            questions={paperQuestionSet}
+            reviewIds={reviewIds}
+            scopeTitle={`${getPaperLabel(selectedPaperId)} · ${getSectionLabel(selectedPaperId, selectedPaperSection)}`}
+            search={paperSearch}
+            wrongIds={wrongIds}
+          />
+        )}
       </main>
     </div>
   );
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   AppHeader (with mode tabs)
+   ─────────────────────────────────────────────────────────────────────────── */
+
 interface AppHeaderProps {
+  appMode: AppMode;
   appView: AppView;
   isDark: boolean;
   onBackToDashboard: () => void;
+  onSwitchMode: (mode: AppMode) => void;
   onToggleTheme: () => void;
   selectedSet: QuestionSet;
-  stats: {
-    accuracy: number;
-    elapsedSeconds: number;
-    matched: number;
-    mistakes: number;
-    total: number;
-  };
+  stats: { accuracy: number; elapsedSeconds: number; matched: number; mistakes: number; total: number };
 }
 
-function AppHeader({ appView, isDark, onBackToDashboard, onToggleTheme, selectedSet, stats }: AppHeaderProps) {
+function AppHeader({ appMode, appView, isDark, onBackToDashboard, onSwitchMode, onToggleTheme, selectedSet, stats }: AppHeaderProps) {
+  const inGame = appView === 'game';
+  const inPaperSub = appView === 'paper-learn' || appView === 'paper-test' || appView === 'paper-results' || appView === 'paper-browser';
+
   return (
-    <header
-      className={`flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between ${
-        isDark ? 'border-stone-700' : 'border-stone-300/80'
-      }`}
-    >
+    <header className={`flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between ${isDark ? 'border-stone-700' : 'border-stone-300/80'}`}>
       <div className="flex items-center gap-3">
-        <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-lg text-white shadow-sm ${isDark ? 'bg-amber-600' : 'bg-red-700'}`}>
+        <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-white shadow-sm ${isDark ? 'bg-amber-600' : 'bg-red-700'}`}>
           <Languages size={26} />
         </div>
-        <div>
-          <p className={`text-sm font-semibold uppercase tracking-[0.18em] ${isDark ? 'text-amber-400' : 'text-red-700'}`}>
-            {appView === 'dashboard' ? 'Question dashboard' : selectedSet.subtitle}
+        <div className="min-w-0">
+          <p className={`text-[0.7rem] font-bold uppercase tracking-[0.2em] ${isDark ? 'text-amber-400' : 'text-red-700'}`}>
+            {appMode === 'kanji' ? (inGame ? selectedSet.subtitle : 'Kanji match dashboard') : 'Question paper practice'}
           </p>
-          <h1 className={`text-3xl font-bold tracking-normal sm:text-4xl ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
+          <h1 className={`text-2xl font-bold tracking-normal sm:text-3xl ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
             Kanji Match Dojo
           </h1>
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-        {appView === 'game' && (
+      <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
+        {/* Mode segmented control */}
+        <div className={`inline-flex rounded-full border p-1 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white'}`}>
           <button
-            className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-              isDark
-                ? 'border-stone-600 bg-stone-900 text-stone-100 hover:bg-stone-800 focus:ring-amber-500 focus:ring-offset-[#12110f]'
-                : 'border-stone-300 bg-white text-stone-900 hover:bg-stone-100 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition ${
+              appMode === 'kanji'
+                ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'
+                : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
+            }`}
+            onClick={() => onSwitchMode('kanji')}
+            type="button"
+          >
+            <Sparkles size={15} />
+            Kanji
+          </button>
+          <button
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition ${
+              appMode === 'papers'
+                ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'
+                : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
+            }`}
+            onClick={() => onSwitchMode('papers')}
+            type="button"
+          >
+            <ClipboardList size={15} />
+            Papers
+          </button>
+        </div>
+
+        {(inGame || inPaperSub) && (
+          <button
+            className={`inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-semibold transition ${
+              isDark ? 'border-stone-700 bg-stone-900 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-900 hover:bg-stone-100'
             }`}
             onClick={onBackToDashboard}
             type="button"
@@ -383,12 +731,11 @@ function AppHeader({ appView, isDark, onBackToDashboard, onToggleTheme, selected
             Dashboard
           </button>
         )}
+
         <button
           aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
-          className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-            isDark
-              ? 'border-stone-600 bg-stone-900 text-amber-200 hover:bg-stone-800 focus:ring-amber-500 focus:ring-offset-[#12110f]'
-              : 'border-stone-300 bg-white text-stone-900 hover:bg-stone-100 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
+          className={`inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-semibold transition ${
+            isDark ? 'border-stone-700 bg-stone-900 text-amber-200 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-900 hover:bg-stone-100'
           }`}
           onClick={onToggleTheme}
           type="button"
@@ -396,8 +743,9 @@ function AppHeader({ appView, isDark, onBackToDashboard, onToggleTheme, selected
           {isDark ? <Sun size={17} /> : <Moon size={17} />}
           {isDark ? 'Light' : 'Dark'}
         </button>
-        {appView === 'game' && (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[34rem]">
+
+        {inGame && (
+          <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4 lg:w-auto lg:min-w-[34rem]">
             <StatCard icon={<Target size={18} />} isDark={isDark} label="Matched" value={`${stats.matched}/${stats.total}`} />
             <StatCard icon={<XCircle size={18} />} isDark={isDark} label="Misses" value={String(stats.mistakes)} />
             <StatCard icon={<Sparkles size={18} />} isDark={isDark} label="Accuracy" value={`${stats.accuracy}%`} />
@@ -409,6 +757,10 @@ function AppHeader({ appView, isDark, onBackToDashboard, onToggleTheme, selected
   );
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Kanji Dashboard (HEAD baseline)
+   ─────────────────────────────────────────────────────────────────────────── */
+
 interface DashboardProps {
   bestTime: number | null;
   isDark: boolean;
@@ -419,97 +771,70 @@ interface DashboardProps {
 }
 
 function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, questionSets, selectedSetId }: DashboardProps) {
-  const selectedSet = questionSets.find((set) => set.id === selectedSetId);
+  const selectedSet = questionSets.find((s) => s.id === selectedSetId);
 
   return (
     <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-      <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-300 bg-white/80'}`}>
+      <div className={`rounded-2xl border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-200 bg-white/85'}`}>
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className={`text-lg font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Choose a question set</h2>
-            <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>
-              Select a deck now; add more decks later without changing the game screen.
-            </p>
+            <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>Pick a deck to drill kanji ↔ meaning matching.</p>
           </div>
           <div className={`hidden h-10 w-10 place-items-center rounded-md sm:grid ${isDark ? 'bg-stone-800 text-amber-300' : 'bg-stone-100 text-red-700'}`}>
             <Layers3 size={20} />
           </div>
         </div>
-
         <div className="grid gap-3 md:grid-cols-2">
-          {questionSets.map((questionSet) => {
-            const selected = questionSet.id === selectedSetId;
-            const preview = questionSet.items.slice(0, 6).map((item) => item.kanji).join(' ');
-
+          {questionSets.map((qs) => {
+            const selected = qs.id === selectedSetId;
+            const preview = qs.items.slice(0, 6).map((i) => i.kanji).join(' ');
             return (
               <button
-                className={`rounded-lg border p-4 text-left shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 ${
                   selected
-                    ? isDark
-                      ? 'border-amber-500 bg-amber-950/50 focus:ring-amber-500 focus:ring-offset-stone-900'
-                      : 'border-red-700 bg-red-50 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
-                    : isDark
-                      ? 'border-stone-700 bg-stone-950 hover:border-stone-500 focus:ring-amber-500 focus:ring-offset-stone-900'
-                      : 'border-stone-300 bg-white hover:border-stone-400 focus:ring-red-700 focus:ring-offset-[#f6f4ef]'
+                    ? isDark ? 'border-amber-500 bg-amber-950/50 focus:ring-amber-500' : 'border-red-700 bg-red-50 focus:ring-red-700'
+                    : isDark ? 'border-stone-800 bg-stone-950 hover:border-stone-500 focus:ring-amber-500' : 'border-stone-200 bg-white hover:border-stone-400 focus:ring-red-700'
                 }`}
-                key={questionSet.id}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onSelectSet(questionSet.id);
-                }}
+                key={qs.id}
+                onClick={(e) => { e.stopPropagation(); onSelectSet(qs.id); }}
                 type="button"
               >
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <div>
-                    <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>{questionSet.level}</p>
-                    <h3 className={`mt-1 text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{questionSet.title}</h3>
+                    <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>{qs.level}</p>
+                    <h3 className={`mt-1 text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{qs.title}</h3>
                   </div>
-                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>
-                    {questionSet.items.length}
-                  </span>
+                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{qs.items.length}</span>
                 </div>
-                <p className={`text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>{questionSet.description}</p>
+                <p className={`text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>{qs.description}</p>
                 <p className={`mt-5 text-3xl font-semibold tracking-normal ${isDark ? 'text-stone-100' : 'text-stone-900'}`}>{preview}</p>
               </button>
             );
           })}
         </div>
       </div>
-
-      <aside className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
-        <div className={`mb-4 grid h-12 w-12 place-items-center rounded-lg ${isDark ? 'bg-amber-600 text-stone-950' : 'bg-red-700 text-white'}`}>
+      <aside className={`rounded-2xl border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-200 bg-white'}`}>
+        <div className={`mb-4 grid h-12 w-12 place-items-center rounded-xl ${isDark ? 'bg-amber-600 text-stone-950' : 'bg-red-700 text-white'}`}>
           <BookOpen size={24} />
         </div>
-        <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
+        <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
           {selectedSet ? 'Selected deck' : 'No deck selected'}
         </p>
-        <h2 className={`mt-2 text-2xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-          {selectedSet ? selectedSet.title : 'Choose a set'}
-        </h2>
-        <p className={`mt-2 text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>
-          {selectedSet ? selectedSet.description : 'Pick a question set from the dashboard before starting a drill.'}
-        </p>
+        <h2 className={`mt-2 text-2xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{selectedSet ? selectedSet.title : 'Choose a set'}</h2>
+        <p className={`mt-2 text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>{selectedSet ? selectedSet.description : 'Pick a deck before starting a drill.'}</p>
         {selectedSet && (
-          <div className={`mt-5 rounded-md p-3 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
-            <p className={`text-xs font-bold uppercase tracking-[0.16em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
-            <p className={`mt-1 text-3xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-              {bestTime === null ? 'Not set' : formatTime(bestTime)}
-            </p>
+          <div className={`mt-5 rounded-xl p-3 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
+            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.16em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
+            <p className={`mt-1 text-3xl font-bold tabular-nums ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{bestTime === null ? 'Not set' : formatTime(bestTime)}</p>
           </div>
         )}
         <button
-          className={`mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${
-            isDark
-              ? 'bg-amber-500 text-stone-950 hover:bg-amber-400 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-stone-950'
-              : 'bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700 focus:ring-offset-2'
+          className={`mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+            isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400 focus:ring-amber-400' : 'bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700'
           }`}
           disabled={!selectedSet}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (selectedSet) {
-              onStartSet(selectedSet.id);
-            }
-          }}
+          onClick={(e) => { e.stopPropagation(); if (selectedSet) onStartSet(selectedSet.id); }}
           type="button"
         >
           <Play size={17} />
@@ -541,28 +866,15 @@ interface GameBoardProps {
 }
 
 function GameBoard({
-  bestTime,
-  elapsedSeconds,
-  isComplete,
-  isDark,
-  isError,
-  matchedIds,
-  mistakes,
-  onKanjiSelect,
-  onMeaningSelect,
-  onReset,
-  remaining,
-  selectedKanji,
-  selectedKanjiId,
-  selectedMeaningId,
-  selectedSet,
-  shuffledKanji,
-  shuffledMeanings,
+  bestTime, elapsedSeconds, isComplete, isDark, isError, matchedIds, mistakes,
+  onKanjiSelect, onMeaningSelect, onReset, remaining,
+  selectedKanji, selectedKanjiId, selectedMeaningId, selectedSet,
+  shuffledKanji, shuffledMeanings,
 }: GameBoardProps) {
   return (
     <>
       <section className="grid gap-4 md:grid-cols-[minmax(0,1fr)_17rem]">
-        <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-300 bg-white/80'}`}>
+        <div className={`rounded-2xl border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/90' : 'border-stone-200 bg-white/80'}`}>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className={`text-lg font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Match each character to its meaning</h2>
@@ -572,10 +884,8 @@ function GameBoard({
             </div>
             <button
               onClick={onReset}
-              className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-                isDark
-                  ? 'border-amber-700 bg-amber-600 text-stone-950 hover:bg-amber-500 focus:ring-amber-500 focus:ring-offset-stone-900'
-                  : 'border-stone-300 bg-stone-950 text-white hover:bg-stone-800 focus:ring-red-700 focus:ring-offset-2'
+              className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${
+                isDark ? 'border-amber-700 bg-amber-600 text-stone-950 hover:bg-amber-500' : 'border-stone-200 bg-stone-950 text-white hover:bg-stone-800'
               }`}
               type="button"
             >
@@ -583,79 +893,45 @@ function GameBoard({
               Reset
             </button>
           </div>
-
           <div className="grid grid-cols-2 gap-3 md:gap-5">
-            <KanjiColumn
-              isDark={isDark}
-              isError={isError}
-              items={shuffledKanji}
-              matchedIds={matchedIds}
-              onSelect={onKanjiSelect}
-              selectedId={selectedKanjiId}
-            />
-            <MeaningColumn
-              isDark={isDark}
-              isError={isError}
-              items={shuffledMeanings}
-              matchedIds={matchedIds}
-              onSelect={onMeaningSelect}
-              selectedId={selectedMeaningId}
-            />
+            <KanjiColumn isDark={isDark} isError={isError} items={shuffledKanji} matchedIds={matchedIds} onSelect={onKanjiSelect} selectedId={selectedKanjiId} />
+            <MeaningColumn isDark={isDark} isError={isError} items={shuffledMeanings} matchedIds={matchedIds} onSelect={onMeaningSelect} selectedId={selectedMeaningId} />
           </div>
         </div>
-
         <aside className="flex flex-col gap-4">
-          <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
-            <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Current pick</p>
-            <div className={`mt-4 min-h-36 rounded-md p-4 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
+          <div className={`rounded-2xl border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-200 bg-white'}`}>
+            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Current pick</p>
+            <div className={`mt-4 min-h-36 rounded-xl p-4 ${isDark ? 'bg-stone-800' : 'bg-stone-100'}`}>
               {selectedKanji ? (
                 <div className="flex h-full flex-col justify-between gap-4">
-                  <span className={`text-6xl font-semibold leading-none ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-                    {selectedKanji.kanji}
-                  </span>
+                  <span className={`text-6xl font-semibold leading-none ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{selectedKanji.kanji}</span>
                   <p className={`text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Choose the matching meaning.</p>
                 </div>
               ) : (
-                <div className={`flex min-h-28 items-center text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
-                  Select a kanji to begin a match.
-                </div>
+                <div className={`flex min-h-28 items-center text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Select a kanji to begin a match.</div>
               )}
             </div>
           </div>
-
-          <div className={`rounded-lg border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
-            <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
-            <p className={`mt-3 text-3xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>
-              {bestTime === null ? 'Not set' : formatTime(bestTime)}
-            </p>
+          <div className={`rounded-2xl border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-200 bg-white'}`}>
+            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Best time</p>
+            <p className={`mt-3 text-3xl font-bold tabular-nums ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{bestTime === null ? 'Not set' : formatTime(bestTime)}</p>
           </div>
         </aside>
       </section>
-
       {isComplete && (
         <motion.section
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          className={`rounded-lg border p-6 text-center shadow-sm ${
-            isDark
-              ? 'border-emerald-800 bg-emerald-950/60 text-emerald-100'
-              : 'border-emerald-300 bg-emerald-50 text-emerald-900'
-          }`}
+          className={`rounded-2xl border p-6 text-center shadow-sm ${isDark ? 'border-emerald-800 bg-emerald-950/60 text-emerald-100' : 'border-emerald-300 bg-emerald-50 text-emerald-900'}`}
           initial={{ opacity: 0, y: 10, scale: 0.98 }}
         >
           <div className={`mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full ${isDark ? 'bg-emerald-900 text-emerald-300' : 'bg-emerald-100 text-emerald-700'}`}>
             <Award size={32} />
           </div>
           <h2 className="text-2xl font-bold">Perfect score. Subarashii!</h2>
-          <p className={`mt-2 text-sm ${isDark ? 'text-emerald-200' : 'text-emerald-800'}`}>
-            Finished in {formatTime(elapsedSeconds)} with {mistakes} misses.
-          </p>
+          <p className={`mt-2 text-sm ${isDark ? 'text-emerald-200' : 'text-emerald-800'}`}>Finished in {formatTime(elapsedSeconds)} with {mistakes} misses.</p>
           <button
             onClick={onReset}
-            className={`mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition focus:outline-none focus:ring-2 ${
-              isDark
-                ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-stone-950'
-                : 'bg-emerald-700 text-white hover:bg-emerald-800 focus:ring-emerald-700 focus:ring-offset-2'
-            }`}
+            className={`mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition ${isDark ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400' : 'bg-emerald-700 text-white hover:bg-emerald-800'}`}
             type="button"
           >
             <RotateCcw size={17} />
@@ -667,43 +943,496 @@ function GameBoard({
   );
 }
 
+interface PaperPracticeDashboardProps {
+  answeredIds: Set<string>;
+  isDark: boolean;
+  onBrowse: (paperId?: string, sectionId?: string) => void;
+  onLearn: (paperId?: string, sectionId?: string, startIndex?: number) => void;
+  onReviewOnly: () => void;
+  onSectionChange: (sectionId: string) => void;
+  onSelectPaper: (paperId: string) => void;
+  onStartTest: (paperId?: string, sectionId?: string, questions?: PaperQuestion[]) => void;
+  reviewIds: Set<string>;
+  selectedPaperId: string;
+  selectedSection: string;
+  studiedCount: number;
+  wrongIds: Set<string>;
+}
+
+function PaperPracticeDashboard({
+  answeredIds, isDark, onBrowse, onLearn, onReviewOnly, onSectionChange,
+  onSelectPaper, onStartTest, reviewIds, selectedPaperId, selectedSection,
+  studiedCount, wrongIds,
+}: PaperPracticeDashboardProps) {
+  const paperListings = QUESTION_PAPER_LISTINGS;
+  const openedListing = getPaperListing(selectedPaperId) ?? paperListings[0];
+  const sections = getPaperSectionsForScope(selectedPaperId);
+  const selectedQuestions = getQuestionsForScope(selectedPaperId, selectedSection);
+  const reviewCount = selectedQuestions.filter((q) => reviewIds.has(q.id)).length;
+  const wrongCount = selectedQuestions.filter((q) => wrongIds.has(q.id)).length;
+  const answeredCount = selectedQuestions.filter((q) => answeredIds.has(q.id)).length;
+  const progressPercent = selectedQuestions.length === 0 ? 0 : Math.round((studiedCount / selectedQuestions.length) * 100);
+  const selectedSectionTitle = selectedSection === 'all'
+    ? 'Full paper'
+    : sections.find((s) => s.id === selectedSection || s.title === selectedSection)?.title ?? 'Selected section';
+  const totalPapers = paperListings.length;
+  const totalQuestions = paperListings.reduce((sum, l) => sum + l.questions.length, 0);
+  const totalReviewable = paperListings.reduce((sum, l) => sum + l.questions.filter((q) => reviewIds.has(q.id)).length, 0);
+
+  return (
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className={`relative overflow-hidden rounded-2xl border p-5 shadow-sm backdrop-blur ${isDark ? 'border-stone-700/80 bg-stone-900/85' : 'border-stone-200 bg-white/90'}`}>
+        <div aria-hidden className={`pointer-events-none absolute -top-24 right-[-4rem] h-56 w-56 rounded-full blur-3xl ${isDark ? 'bg-amber-500/15' : 'bg-red-600/10'}`} />
+        <div className="relative mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.2em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>Question Paper Practice</p>
+            <h2 className={`mt-1 text-2xl font-bold leading-tight md:text-3xl ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Pick a paper</h2>
+            <p className={`mt-1 text-sm ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>{totalPapers} curated papers · {totalQuestions} questions · {totalReviewable} flagged for review</p>
+          </div>
+          <button
+            className={`inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/80 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`}
+            onClick={() => onBrowse(selectedPaperId, selectedSection)}
+            type="button"
+          >
+            <Eye size={16} />
+            View questions
+          </button>
+        </div>
+        <div className="relative grid gap-3 sm:grid-cols-2">
+          {paperListings.map((listing) => (
+            <Fragment key={listing.id}>
+              <PaperListingCard isDark={isDark} listing={listing} onSelect={() => onSelectPaper(listing.id)} reviewIds={reviewIds} selected={selectedPaperId === listing.id} wrongIds={wrongIds} />
+            </Fragment>
+          ))}
+        </div>
+      </div>
+
+      <aside className={`relative overflow-hidden rounded-2xl border p-5 shadow-sm backdrop-blur lg:sticky lg:top-4 lg:max-h-[calc(100vh-1.5rem)] lg:overflow-y-auto ${isDark ? 'border-stone-700/80 bg-stone-900/90' : 'border-stone-200 bg-white/95'}`}>
+        <div aria-hidden className={`pointer-events-none absolute -top-16 right-[-3rem] h-36 w-36 rounded-full blur-2xl ${isDark ? 'bg-amber-500/15' : 'bg-red-600/10'}`} />
+        <div className="relative">
+          <div className="flex items-start gap-3">
+            <div className={`grid h-12 w-12 place-items-center rounded-xl shadow-sm ${isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'}`}><BarChart3 size={22} /></div>
+            <div className="min-w-0 flex-1">
+              <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Opened paper</p>
+              <h2 className={`mt-1 truncate text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{openedListing?.title ?? getPaperLabel(selectedPaperId)}</h2>
+              {openedListing?.subtitle && (<p className={`mt-0.5 truncate text-[0.72rem] font-semibold uppercase tracking-[0.08em] ${isDark ? 'text-amber-300/80' : 'text-red-700/80'}`}>{openedListing.subtitle}</p>)}
+            </div>
+          </div>
+          {openedListing?.description && (<p className={`mt-3 text-sm leading-6 ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>{openedListing.description}</p>)}
+
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <MiniMetric isDark={isDark} label="Questions" tone="neutral" value={String(selectedQuestions.length)} />
+            <MiniMetric isDark={isDark} label="Answered" tone="success" value={String(answeredCount)} />
+            <MiniMetric isDark={isDark} label="Review" tone="amber" value={String(reviewCount)} />
+            <MiniMetric isDark={isDark} label="Wrong" tone="danger" value={String(wrongCount)} />
+          </div>
+
+          <div className="mt-5">
+            <div className={`flex items-center justify-between text-xs font-semibold ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
+              <span>Progress</span>
+              <span className="tabular-nums">{progressPercent}%</span>
+            </div>
+            <div className={`mt-1.5 h-2 overflow-hidden rounded-full ${isDark ? 'bg-stone-800' : 'bg-stone-200'}`}>
+              <div className={`h-full rounded-full transition-[width] duration-500 ease-out ${isDark ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-600 to-red-700'}`} style={{ width: `${progressPercent}%` }} />
+            </div>
+            <p className={`mt-2 truncate text-xs font-medium ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>{studiedCount}/{selectedQuestions.length} reviewed · {selectedSectionTitle}</p>
+          </div>
+
+          <div className="mt-5 grid gap-2">
+            <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 ${isDark ? 'bg-gradient-to-r from-amber-400 to-amber-500 text-stone-950 hover:from-amber-300 hover:to-amber-400' : 'bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-500 hover:to-red-600'}`} onClick={() => onLearn(selectedPaperId, 'all')} type="button"><BookOpen size={16} />Full paper review</button>
+            <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onStartTest(selectedPaperId, 'all')} type="button"><ClipboardList size={16} />Full paper test</button>
+            <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onBrowse(selectedPaperId, selectedSection)} type="button"><Eye size={16} />View opened questions</button>
+            {selectedSection !== 'all' && (
+              <>
+                <div className={`mt-1 border-t pt-3 text-[0.7rem] font-bold uppercase tracking-[0.16em] ${isDark ? 'border-stone-800 text-stone-500' : 'border-stone-200 text-stone-500'}`}>Section actions</div>
+                <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onLearn(selectedPaperId, selectedSection)} type="button"><BookMarked size={15} />Review section</button>
+                <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onStartTest(selectedPaperId, selectedSection)} type="button"><ClipboardList size={15} />Test section</button>
+              </>
+            )}
+            <button className={`mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 ${isDark ? 'border-amber-700/70 bg-amber-950/40 text-amber-200 hover:bg-amber-950/60' : 'border-red-200 bg-red-50 text-red-800 hover:bg-red-100'}`} disabled={reviewCount === 0} onClick={onReviewOnly} type="button"><Flag size={15} />Practice review-later ({reviewCount})</button>
+          </div>
+
+          <div className="mt-6">
+            <div className="flex items-center justify-between gap-3">
+              <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Sections · {sections.length}</p>
+              <button className={`rounded-full px-3 py-1 text-[0.7rem] font-bold transition ${selectedSection === 'all' ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : isDark ? 'bg-stone-800 text-stone-300 hover:bg-stone-700' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`} onClick={() => onSectionChange('all')} type="button">Full paper</button>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {sections.map((section) => {
+                const sReview = section.questions.filter((q) => reviewIds.has(q.id)).length;
+                const sWrong = section.questions.filter((q) => wrongIds.has(q.id)).length;
+                const isSel = selectedSection === section.id || selectedSection === section.title;
+                return (
+                  <button
+                    className={`group relative overflow-hidden rounded-xl border p-3 text-left transition hover:-translate-y-0.5 ${isSel ? isDark ? 'border-amber-500 bg-amber-950/50 shadow-sm shadow-amber-900/30' : 'border-red-700 bg-red-50 shadow-sm shadow-red-900/10' : isDark ? 'border-stone-800 bg-stone-950/60 hover:border-stone-600' : 'border-stone-200 bg-white hover:border-stone-400'}`}
+                    key={section.id}
+                    onClick={() => onSectionChange(section.id)}
+                    type="button"
+                  >
+                    {isSel && <span aria-hidden className={`absolute left-0 top-0 h-full w-1 ${isDark ? 'bg-amber-400' : 'bg-red-700'}`} />}
+                    <span className={`block text-sm font-bold leading-5 ${isDark ? 'text-stone-100' : 'text-stone-950'}`}>{section.title}</span>
+                    {section.subtitle && (<span className={`mt-0.5 block text-[0.7rem] font-medium ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>{section.subtitle}</span>)}
+                    <span className={`mt-2 flex flex-wrap gap-2 text-[0.72rem] font-semibold ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
+                      <span>{section.questions.length} questions</span>
+                      {sReview > 0 && <span className={isDark ? 'text-amber-300' : 'text-amber-700'}>★ {sReview}</span>}
+                      {sWrong > 0 && <span className={isDark ? 'text-rose-300' : 'text-rose-700'}>✕ {sWrong}</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <button className={`mt-5 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-800 bg-stone-950/60 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-100'}`} onClick={() => onSelectPaper(ALL_PAPERS_ID)} type="button"><ListFilter size={15} />All papers aggregate</button>
+        </div>
+      </aside>
+    </section>
+  );
+}
+
+type PaperKind = 'see' | 'midsem' | 'test' | 'pretest' | 'pattern';
+
+function classifyPaper(listing: PaperListing): PaperKind {
+  if (listing.id === 'paper-pattern-bank') return 'pattern';
+  if (listing.id.includes('midsem')) return 'midsem';
+  if (listing.id.includes('pretest') || listing.id === 'paper-feb-2026') return 'pretest';
+  if (listing.id === 'paper-jan-2026') return 'test';
+  return 'see';
+}
+
+const PAPER_KIND_LABEL: Record<PaperKind, string> = {
+  see: 'SEE paper', midsem: 'Mid-sem', test: 'Class test', pretest: 'Pre-test', pattern: 'Patterns',
+};
+
+function getPaperKindStyles(kind: PaperKind, isDark: boolean) {
+  if (isDark) {
+    switch (kind) {
+      case 'see': return { chip: 'bg-amber-500/20 text-amber-200 border-amber-500/40', accent: 'from-amber-400/40' };
+      case 'midsem': return { chip: 'bg-sky-500/20 text-sky-200 border-sky-500/40', accent: 'from-sky-400/40' };
+      case 'test': return { chip: 'bg-violet-500/20 text-violet-200 border-violet-500/40', accent: 'from-violet-400/40' };
+      case 'pretest': return { chip: 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40', accent: 'from-emerald-400/40' };
+      case 'pattern': return { chip: 'bg-stone-700/60 text-stone-200 border-stone-600/60', accent: 'from-stone-500/40' };
+    }
+  }
+  switch (kind) {
+    case 'see': return { chip: 'bg-red-100 text-red-800 border-red-200', accent: 'from-red-400/30' };
+    case 'midsem': return { chip: 'bg-sky-100 text-sky-800 border-sky-200', accent: 'from-sky-400/30' };
+    case 'test': return { chip: 'bg-violet-100 text-violet-800 border-violet-200', accent: 'from-violet-400/30' };
+    case 'pretest': return { chip: 'bg-emerald-100 text-emerald-800 border-emerald-200', accent: 'from-emerald-400/30' };
+    case 'pattern': return { chip: 'bg-stone-100 text-stone-800 border-stone-200', accent: 'from-stone-400/30' };
+  }
+}
+
+function PaperListingCard({ isDark, listing, onSelect, reviewIds, selected, wrongIds }: { isDark: boolean; listing: PaperListing; onSelect: () => void; reviewIds: Set<string>; selected: boolean; wrongIds: Set<string>; }) {
+  const reviewCount = listing.questions.filter((q) => reviewIds.has(q.id)).length;
+  const wrongCount = listing.questions.filter((q) => wrongIds.has(q.id)).length;
+  const kind = classifyPaper(listing);
+  const kindStyles = getPaperKindStyles(kind, isDark);
+  return (
+    <button
+      className={`group relative overflow-hidden rounded-2xl border p-4 text-left shadow-sm transition focus:outline-none focus:ring-2 hover:-translate-y-0.5 hover:shadow-md ${selected ? isDark ? 'border-amber-500 bg-amber-950/40 ring-1 ring-amber-500/40 focus:ring-amber-500' : 'border-red-700 bg-red-50 ring-1 ring-red-500/30 focus:ring-red-700' : isDark ? 'border-stone-800 bg-stone-950/70 hover:border-stone-600 focus:ring-amber-500' : 'border-stone-200 bg-white hover:border-stone-300 focus:ring-red-700'}`}
+      onClick={onSelect} type="button"
+    >
+      <span aria-hidden className={`pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br ${kindStyles.accent} to-transparent blur-2xl`} />
+      <div className="relative flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className={`text-base font-bold leading-6 ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{listing.title}</h3>
+            <span className={`rounded-full border px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-[0.08em] ${kindStyles.chip}`}>{PAPER_KIND_LABEL[kind]}</span>
+          </div>
+          {listing.subtitle && (<p className={`mt-0.5 truncate text-[0.7rem] font-semibold uppercase tracking-[0.08em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>{listing.subtitle}</p>)}
+          <p className={`mt-1.5 text-sm leading-5 ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>{listing.description}</p>
+        </div>
+        <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold tabular-nums ${isDark ? 'bg-stone-800/80 text-stone-100' : 'bg-stone-100 text-stone-800'}`}>{listing.questions.length} q</span>
+      </div>
+      <div className={`relative mt-4 flex flex-wrap gap-x-3 gap-y-1 text-[0.72rem] font-semibold ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
+        <span>{listing.sections.length} section{listing.sections.length === 1 ? '' : 's'}</span>
+        {reviewCount > 0 && <span className={isDark ? 'text-amber-300' : 'text-amber-700'}>★ {reviewCount} to review</span>}
+        {wrongCount > 0 && <span className={isDark ? 'text-rose-300' : 'text-rose-700'}>✕ {wrongCount} wrong</span>}
+        {selected && (<span className={`ml-auto inline-flex items-center gap-1 text-[0.7rem] font-bold uppercase tracking-[0.08em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}><span className={`h-1.5 w-1.5 rounded-full ${isDark ? 'bg-amber-400' : 'bg-red-700'}`} /> Opened</span>)}
+      </div>
+    </button>
+  );
+}
+
+type MetricTone = 'neutral' | 'success' | 'amber' | 'danger';
+
+function getMetricToneStyles(tone: MetricTone, isDark: boolean) {
+  if (isDark) {
+    switch (tone) {
+      case 'success': return 'border-emerald-700/50 bg-emerald-950/40 text-emerald-200';
+      case 'amber': return 'border-amber-700/50 bg-amber-950/40 text-amber-200';
+      case 'danger': return 'border-rose-700/50 bg-rose-950/40 text-rose-200';
+      default: return 'border-stone-700 bg-stone-950 text-stone-50';
+    }
+  }
+  switch (tone) {
+    case 'success': return 'border-emerald-200 bg-emerald-50 text-emerald-900';
+    case 'amber': return 'border-amber-200 bg-amber-50 text-amber-900';
+    case 'danger': return 'border-rose-200 bg-rose-50 text-rose-900';
+    default: return 'border-stone-200 bg-stone-50 text-stone-900';
+  }
+}
+
+function MiniMetric({ isDark, label, tone = 'neutral', value }: { isDark: boolean; label: string; tone?: MetricTone; value: string }) {
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${getMetricToneStyles(tone, isDark)}`}>
+      <p className="text-[0.65rem] font-bold uppercase tracking-[0.12em] opacity-75">{label}</p>
+      <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+interface PaperLearnModeProps {
+  currentIndex: number;
+  isDark: boolean;
+  onBack: () => void;
+  onMove: (direction: -1 | 1) => void;
+  onStartTest: () => void;
+  onToggleReview: (questionId: string) => void;
+  question: PaperQuestion | undefined;
+  questions: PaperQuestion[];
+  reviewIds: Set<string>;
+  scopeTitle: string;
+  studiedCount: number;
+}
+
+function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onToggleReview, question, questions, reviewIds, scopeTitle, studiedCount }: PaperLearnModeProps) {
+  const isMarked = question ? reviewIds.has(question.id) : false;
+  const correct = question?.options.find((o) => o.isCorrect);
+  if (!question) {
+    return (
+      <section className={`rounded-2xl border p-8 text-center shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}>
+        <h2 className={`text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>No questions in scope</h2>
+        <p className={`mt-2 text-sm ${isDark ? 'text-stone-400' : 'text-stone-600'}`}>Try a different paper or section.</p>
+        <button onClick={onBack} className={`mt-4 inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-sm font-semibold ${isDark ? 'border-stone-700 bg-stone-950 text-stone-100' : 'border-stone-200 bg-white text-stone-950'}`} type="button"><ArrowLeft size={16} /> Back</button>
+      </section>
+    );
+  }
+  return (
+    <section className="grid gap-4">
+      <div className={`flex flex-wrap items-center gap-3 rounded-2xl border p-3 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}>
+        <p className={`text-[0.72rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>{scopeTitle}</p>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold tabular-nums ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{currentIndex + 1} / {questions.length}</span>
+        <span className={`text-xs ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Reviewed {studiedCount}/{questions.length}</span>
+        <div className="ml-auto flex flex-wrap gap-2">
+          <button onClick={() => onToggleReview(question.id)} className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition ${isMarked ? isDark ? 'border-amber-500 bg-amber-950/50 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-800' : isDark ? 'border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-100'}`} type="button"><Flag size={13} /> {isMarked ? 'Marked' : 'Mark for review'}</button>
+          <button onClick={onStartTest} className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition ${isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400' : 'bg-red-700 text-white hover:bg-red-800'}`} type="button"><ClipboardList size={13} /> Test these</button>
+        </div>
+      </div>
+      <article className={`rounded-2xl border p-5 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/85' : 'border-stone-200 bg-white/90'}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>{question.sectionTitle.replace(/^[^\p{L}\p{N}]+/u, '').trim() || 'Section'}</p>
+            <h3 className={`mt-1 text-lg font-bold leading-7 ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{question.number} {question.prompt}</h3>
+          </div>
+          {question.prediction?.label && (<span className={`shrink-0 rounded-full px-3 py-1 text-[0.7rem] font-bold ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{question.prediction.label}</span>)}
+        </div>
+        {question.options.length > 0 && (
+          <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+            {question.options.map((option) => (
+              <li key={option.id} className={`rounded-xl border p-3 text-sm ${option.isCorrect ? isDark ? 'border-emerald-700 bg-emerald-950/40 text-emerald-100' : 'border-emerald-300 bg-emerald-50 text-emerald-900' : isDark ? 'border-stone-800 bg-stone-950/60 text-stone-200' : 'border-stone-200 bg-white text-stone-800'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium leading-5">{option.text}</span>
+                  {option.isCorrect && <CheckCircle2 size={16} className={isDark ? 'text-emerald-300' : 'text-emerald-700'} />}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {(question.explanation.length > 0 || correct) && (
+          <div className={`mt-4 rounded-xl p-3 text-sm leading-6 ${isDark ? 'bg-stone-800/50 text-stone-300' : 'bg-stone-100 text-stone-700'}`}>
+            {correct && <p className={`mb-2 text-[0.72rem] font-bold uppercase tracking-[0.16em] ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Answer · {correct.text}</p>}
+            {question.explanation.map((line, idx) => (<p key={idx} className="mt-1">{line}</p>))}
+          </div>
+        )}
+      </article>
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={() => onMove(-1)} disabled={currentIndex === 0} className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold transition disabled:opacity-50 ${isDark ? 'border-stone-700 bg-stone-950 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} type="button"><ChevronLeft size={16} /> Previous</button>
+        <p className={`text-xs font-semibold ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>← / → to navigate</p>
+        <button onClick={() => onMove(1)} disabled={currentIndex >= questions.length - 1} className={`inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:opacity-50 ${isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400' : 'bg-red-700 text-white hover:bg-red-800'}`} type="button">Next <ChevronRight size={16} /></button>
+      </div>
+    </section>
+  );
+}
+
+interface PaperTestModeProps {
+  answers: Record<string, string>;
+  currentIndex: number;
+  elapsedSeconds: number;
+  isDark: boolean;
+  onAnswer: (questionId: string, optionId: string) => void;
+  onBack: () => void;
+  onFinish: () => void;
+  onJump: (index: number) => void;
+  onMove: (direction: -1 | 1) => void;
+  question: PaperQuestion | undefined;
+  questions: PaperQuestion[];
+  scopeTitle: string;
+}
+
+function PaperTestMode({ answers, currentIndex, elapsedSeconds, isDark, onAnswer, onBack, onFinish, onJump, onMove, question, questions, scopeTitle }: PaperTestModeProps) {
+  if (!question) {
+    return (<section className={`rounded-2xl border p-8 text-center shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}><p>No questions available.</p><button onClick={onBack} className="mt-4" type="button">Back</button></section>);
+  }
+  const answered = answers[question.id];
+  return (
+    <section className="grid gap-4">
+      <div className={`flex flex-wrap items-center gap-3 rounded-2xl border p-3 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}>
+        <p className={`text-[0.72rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>{scopeTitle}</p>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold tabular-nums ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{currentIndex + 1} / {questions.length}</span>
+        <span className={`inline-flex items-center gap-1 text-xs font-semibold tabular-nums ${isDark ? 'text-stone-400' : 'text-stone-500'}`}><Clock3 size={13} /> {formatTime(elapsedSeconds)}</span>
+        <button onClick={onFinish} className={`ml-auto inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold ${isDark ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400' : 'bg-emerald-700 text-white hover:bg-emerald-800'}`} type="button"><CheckCircle2 size={13} /> Submit</button>
+      </div>
+      <article className={`rounded-2xl border p-5 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/85' : 'border-stone-200 bg-white/90'}`}>
+        <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>{question.sectionTitle.replace(/^[^\p{L}\p{N}]+/u, '').trim() || 'Section'}</p>
+        <h3 className={`mt-1 text-lg font-bold leading-7 ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{question.number} {question.prompt}</h3>
+        {question.options.length > 0 ? (
+          <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+            {question.options.map((option) => {
+              const isSel = answered === option.id;
+              return (<li key={option.id}><button onClick={() => onAnswer(question.id, option.id)} className={`w-full rounded-xl border p-3 text-left text-sm transition hover:-translate-y-0.5 ${isSel ? isDark ? 'border-amber-500 bg-amber-950/40 text-amber-100' : 'border-red-700 bg-red-50 text-red-900' : isDark ? 'border-stone-800 bg-stone-950/60 text-stone-200 hover:border-stone-600' : 'border-stone-200 bg-white text-stone-800 hover:border-stone-400'}`} type="button">{option.text}</button></li>);
+            })}
+          </ul>
+        ) : (<p className={`mt-4 text-sm ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>Descriptive question — review the answer in Learn mode.</p>)}
+      </article>
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={() => onMove(-1)} disabled={currentIndex === 0} className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold transition disabled:opacity-50 ${isDark ? 'border-stone-700 bg-stone-950 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} type="button"><ChevronLeft size={16} /> Previous</button>
+        <div className="flex flex-wrap items-center gap-1">
+          {questions.slice(0, 20).map((q, i) => (
+            <button key={q.id} onClick={() => onJump(i)} className={`h-6 w-6 rounded text-[0.65rem] font-bold tabular-nums transition ${i === currentIndex ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : answers[q.id] ? isDark ? 'bg-emerald-900/60 text-emerald-200' : 'bg-emerald-100 text-emerald-800' : isDark ? 'bg-stone-800 text-stone-400 hover:bg-stone-700' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`} type="button">{i + 1}</button>
+          ))}
+          {questions.length > 20 && <span className={`text-xs ${isDark ? 'text-stone-500' : 'text-stone-500'}`}>+{questions.length - 20}</span>}
+        </div>
+        <button onClick={() => onMove(1)} disabled={currentIndex >= questions.length - 1} className={`inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:opacity-50 ${isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400' : 'bg-red-700 text-white hover:bg-red-800'}`} type="button">Next <ChevronRight size={16} /></button>
+      </div>
+    </section>
+  );
+}
+
+interface PaperResultsProps {
+  answers: Record<string, string>;
+  elapsedSeconds: number;
+  isDark: boolean;
+  onBack: () => void;
+  onRetry: () => void;
+  questions: PaperQuestion[];
+  scopeTitle: string;
+}
+
+function PaperResults({ answers, elapsedSeconds, isDark, onBack, onRetry, questions, scopeTitle }: PaperResultsProps) {
+  const answered = questions.filter((q) => answers[q.id] !== undefined);
+  const correct = answered.filter((q) => { const c = q.options.find((o) => o.isCorrect); return c && answers[q.id] === c.id; });
+  const score = answered.length === 0 ? 0 : Math.round((correct.length / answered.length) * 100);
+  return (
+    <section className="grid gap-4">
+      <div className={`rounded-2xl border p-6 text-center shadow-sm ${isDark ? 'border-emerald-800 bg-emerald-950/60 text-emerald-100' : 'border-emerald-300 bg-emerald-50 text-emerald-900'}`}>
+        <div className={`mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full ${isDark ? 'bg-emerald-900 text-emerald-300' : 'bg-emerald-100 text-emerald-700'}`}><Award size={32} /></div>
+        <h2 className="text-2xl font-bold">{scopeTitle}</h2>
+        <p className={`mt-1 text-sm ${isDark ? 'text-emerald-200' : 'text-emerald-800'}`}>{correct.length} of {answered.length} correct · {score}% · {formatTime(elapsedSeconds)}</p>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <button onClick={onRetry} className={`inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold ${isDark ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400' : 'bg-emerald-700 text-white hover:bg-emerald-800'}`} type="button"><RotateCcw size={15} /> Retry</button>
+          <button onClick={onBack} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-sm font-semibold ${isDark ? 'border-emerald-700 bg-emerald-950/40 text-emerald-100' : 'border-emerald-300 bg-white text-emerald-900'}`} type="button"><ArrowLeft size={15} /> Back</button>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        {questions.map((q) => {
+          const given = answers[q.id];
+          const c = q.options.find((o) => o.isCorrect);
+          const isCorrect = c && given === c.id;
+          const isUnanswered = given === undefined;
+          return (
+            <div key={q.id} className={`rounded-xl border p-3 text-sm ${isUnanswered ? isDark ? 'border-stone-800 bg-stone-950/50 text-stone-400' : 'border-stone-200 bg-stone-50 text-stone-600' : isCorrect ? isDark ? 'border-emerald-700/50 bg-emerald-950/30 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-800' : isDark ? 'border-rose-700/50 bg-rose-950/30 text-rose-200' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>
+              <p className="font-semibold">{q.number} {q.prompt}</p>
+              <p className="mt-1 text-xs">Your answer: {given ? q.options.find((o) => o.id === given)?.text ?? '—' : 'Not answered'}{c && !isCorrect && (<span className="ml-2">· Correct: {c.text}</span>)}</p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+interface PaperQuestionBrowserProps {
+  answeredIds: Set<string>;
+  filter: PaperFilter;
+  isDark: boolean;
+  onBack: () => void;
+  onFilterChange: (filter: PaperFilter) => void;
+  onOpenLearn: (index: number) => void;
+  onSearchChange: (value: string) => void;
+  onToggleReview: (questionId: string) => void;
+  questions: PaperQuestion[];
+  reviewIds: Set<string>;
+  scopeTitle: string;
+  search: string;
+  wrongIds: Set<string>;
+}
+
+function PaperQuestionBrowser({ answeredIds, filter, isDark, onBack, onFilterChange, onOpenLearn, onSearchChange, onToggleReview, questions, reviewIds, scopeTitle, search, wrongIds }: PaperQuestionBrowserProps) {
+  const filtered = questions.map((q, i) => ({ q, i })).filter(({ q }) => {
+    if (filter === 'unanswered' && answeredIds.has(q.id)) return false;
+    if (filter === 'wrong' && !wrongIds.has(q.id)) return false;
+    if (filter === 'review' && !reviewIds.has(q.id)) return false;
+    if (search.trim()) {
+      const needle = search.trim().toLowerCase();
+      if (!(q.prompt.toLowerCase().includes(needle) || q.number.toLowerCase().includes(needle))) return false;
+    }
+    return true;
+  });
+  return (
+    <section className="grid gap-4">
+      <div className={`flex flex-wrap items-center gap-3 rounded-2xl border p-3 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/80' : 'border-stone-200 bg-white/85'}`}>
+        <button onClick={onBack} className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${isDark ? 'border-stone-700 bg-stone-950 text-stone-300' : 'border-stone-200 bg-white text-stone-700'}`} type="button"><ArrowLeft size={14} /> Back</button>
+        <p className={`text-[0.72rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>{scopeTitle}</p>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold tabular-nums ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{filtered.length} / {questions.length}</span>
+        <div className={`ml-auto inline-flex items-center gap-2 rounded-full border px-3 py-1.5 ${isDark ? 'border-stone-700 bg-stone-950' : 'border-stone-200 bg-white'}`}>
+          <Search size={14} className={isDark ? 'text-stone-500' : 'text-stone-400'} />
+          <input value={search} onChange={(e) => onSearchChange(e.target.value)} placeholder="Search prompts" className={`min-w-[8rem] bg-transparent text-sm outline-none ${isDark ? 'text-stone-100 placeholder:text-stone-500' : 'text-stone-900 placeholder:text-stone-400'}`} />
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {(['all', 'unanswered', 'wrong', 'review'] as PaperFilter[]).map((f) => (
+          <button key={f} onClick={() => onFilterChange(f)} className={`rounded-full px-3 py-1 text-xs font-bold capitalize transition ${filter === f ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white' : isDark ? 'bg-stone-800 text-stone-300 hover:bg-stone-700' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`} type="button">{f}</button>
+        ))}
+      </div>
+      <div className="grid gap-2">
+        {filtered.map(({ q, i }) => {
+          const correct = q.options.find((o) => o.isCorrect);
+          const isReview = reviewIds.has(q.id);
+          const isWrong = wrongIds.has(q.id);
+          return (
+            <button key={q.id} onClick={() => onOpenLearn(i)} className={`group rounded-xl border p-3 text-left transition hover:-translate-y-0.5 ${isDark ? 'border-stone-800 bg-stone-950/60 hover:border-stone-600' : 'border-stone-200 bg-white hover:border-stone-400'}`} type="button">
+              <div className="flex items-start gap-3">
+                <span className={`mt-0.5 shrink-0 rounded-md px-2 py-0.5 text-[0.65rem] font-bold tabular-nums ${isDark ? 'bg-stone-800 text-stone-200' : 'bg-stone-100 text-stone-700'}`}>{q.number}</span>
+                <div className="min-w-0 flex-1">
+                  <p className={`text-sm font-semibold leading-6 ${isDark ? 'text-stone-100' : 'text-stone-950'}`}>{q.prompt}</p>
+                  {correct && (<p className={`mt-1 text-[0.72rem] font-medium ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>✓ {correct.text}</p>)}
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {isReview && <span className={isDark ? 'text-amber-300' : 'text-amber-700'} title="Marked for review">★</span>}
+                  {isWrong && <span className={isDark ? 'text-rose-300' : 'text-rose-700'} title="Answered wrong">✕</span>}
+                  <span onClick={(e) => { e.stopPropagation(); onToggleReview(q.id); }} role="button" className={`ml-2 inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[0.65rem] font-bold ${isReview ? (isDark ? 'border-amber-500 text-amber-200' : 'border-amber-400 text-amber-700') : (isDark ? 'border-stone-700 text-stone-400' : 'border-stone-300 text-stone-600')}`}><Flag size={11} /> {isReview ? 'Marked' : 'Mark'}</span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+        {filtered.length === 0 && (<p className={`rounded-xl border p-6 text-center text-sm ${isDark ? 'border-stone-800 bg-stone-950 text-stone-400' : 'border-stone-200 bg-white text-stone-500'}`}>No questions match the current filter.</p>)}
+      </div>
+    </section>
+  );
+}
+
 function SplashScreen({ isDark }: { isDark: boolean }) {
   return (
-    <motion.div
-      animate={{ opacity: 1 }}
-      className={`fixed inset-0 z-50 flex items-center justify-center px-6 ${
-        isDark ? 'bg-[#0f0e0c] text-stone-50' : 'bg-[#fbf7ef] text-stone-950'
-      }`}
-      initial={{ opacity: 0 }}
-    >
-      <motion.div
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="flex flex-col items-center text-center"
-        initial={{ opacity: 0, scale: 0.96, y: 10 }}
-        transition={{ duration: 0.35 }}
-      >
-        <div
-          className={`mb-5 grid h-20 w-20 place-items-center rounded-2xl border text-4xl font-bold shadow-sm ${
-            isDark
-              ? 'border-amber-700 bg-stone-900 text-amber-300'
-              : 'border-red-200 bg-white text-red-700'
-          }`}
-        >
-          {isDark ? '月' : '日'}
-        </div>
-        <div className={`mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] ${
-          isDark ? 'border-stone-700 text-amber-300' : 'border-stone-300 text-red-700'
-        }`}>
-          {isDark ? <Moon size={14} /> : <Sun size={14} />}
-          {isDark ? 'Dark mode' : 'Light mode'}
-        </div>
+    <motion.div animate={{ opacity: 1 }} className={`fixed inset-0 z-50 flex items-center justify-center px-6 ${isDark ? 'bg-[#0f0e0c] text-stone-50' : 'bg-[#fbf7ef] text-stone-950'}`} initial={{ opacity: 0 }}>
+      <motion.div animate={{ opacity: 1, scale: 1, y: 0 }} className="flex flex-col items-center text-center" initial={{ opacity: 0, scale: 0.96, y: 10 }} transition={{ duration: 0.35 }}>
+        <div className={`mb-5 grid h-20 w-20 place-items-center rounded-2xl border text-4xl font-bold shadow-sm ${isDark ? 'border-amber-700 bg-stone-900 text-amber-300' : 'border-red-200 bg-white text-red-700'}`}>{isDark ? '月' : '日'}</div>
+        <div className={`mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] ${isDark ? 'border-stone-700 text-amber-300' : 'border-stone-300 text-red-700'}`}>{isDark ? <Moon size={14} /> : <Sun size={14} />}{isDark ? 'Dark mode' : 'Light mode'}</div>
         <h2 className="text-3xl font-bold tracking-normal sm:text-4xl">Kanji Match Dojo</h2>
         <div className={`mt-6 h-1.5 w-44 overflow-hidden rounded-full ${isDark ? 'bg-stone-800' : 'bg-stone-200'}`}>
-          <motion.div
-            animate={{ x: ['-100%', '100%'] }}
-            className={`h-full w-1/2 rounded-full ${isDark ? 'bg-amber-400' : 'bg-red-700'}`}
-            transition={{ duration: 0.9, ease: 'easeInOut' }}
-          />
+          <motion.div animate={{ x: ['-100%', '100%'] }} className={`h-full w-1/2 rounded-full ${isDark ? 'bg-amber-400' : 'bg-red-700'}`} transition={{ duration: 0.9, ease: 'easeInOut' }} />
         </div>
       </motion.div>
     </motion.div>
@@ -723,20 +1452,13 @@ function KanjiColumn({ isDark, isError, items, matchedIds, onSelect, selectedId 
   return (
     <div className="flex flex-col gap-2">
       <ColumnHeading isDark={isDark} label="Kanji" />
-      {items
-        .filter((item) => !matchedIds.has(item.id))
-        .map((item) => (
-          <Fragment key={`kanji-${item.id}`}>
-            <MatchButton
-              isDark={isDark}
-              isError={isError}
-              onClick={() => onSelect(item.id)}
-              selected={selectedId === item.id}
-            >
-              <span className="text-4xl font-semibold leading-none sm:text-5xl">{item.kanji}</span>
-            </MatchButton>
-          </Fragment>
-        ))}
+      {items.filter((item) => !matchedIds.has(item.id)).map((item) => (
+        <Fragment key={`kanji-${item.id}`}>
+          <MatchButton isDark={isDark} isError={isError} onClick={() => onSelect(item.id)} selected={selectedId === item.id}>
+            <span className="text-4xl font-semibold leading-none sm:text-5xl">{item.kanji}</span>
+          </MatchButton>
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -745,33 +1467,22 @@ function MeaningColumn({ isDark, isError, items, matchedIds, onSelect, selectedI
   return (
     <div className="flex flex-col gap-2">
       <ColumnHeading isDark={isDark} label="Meaning" />
-      {items
-        .filter((item) => !matchedIds.has(item.id))
-        .map((item) => (
-          <Fragment key={`meaning-${item.id}`}>
-            <MatchButton
-              isDark={isDark}
-              isError={isError}
-              onClick={() => onSelect(item.id)}
-              selected={selectedId === item.id}
-            >
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate text-sm font-bold text-current sm:text-base">{item.meaning}</span>
-              </span>
-            </MatchButton>
-          </Fragment>
-        ))}
+      {items.filter((item) => !matchedIds.has(item.id)).map((item) => (
+        <Fragment key={`meaning-${item.id}`}>
+          <MatchButton isDark={isDark} isError={isError} onClick={() => onSelect(item.id)} selected={selectedId === item.id}>
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-bold text-current sm:text-base">{item.meaning}</span>
+            </span>
+          </MatchButton>
+        </Fragment>
+      ))}
     </div>
   );
 }
 
 function ColumnHeading({ isDark, label }: { isDark: boolean; label: string }) {
   return (
-    <div className={`sticky top-0 z-10 rounded-md border px-3 py-2 text-center text-xs font-bold uppercase tracking-[0.18em] backdrop-blur ${
-      isDark ? 'border-stone-700 bg-stone-900/95 text-stone-400' : 'border-stone-200 bg-white/95 text-stone-500'
-    }`}>
-      {label}
-    </div>
+    <div className={`sticky top-0 z-10 rounded-md border px-3 py-2 text-center text-xs font-bold uppercase tracking-[0.18em] backdrop-blur ${isDark ? 'border-stone-700 bg-stone-900/95 text-stone-400' : 'border-stone-200 bg-white/95 text-stone-500'}`}>{label}</div>
   );
 }
 
@@ -786,40 +1497,10 @@ interface MatchButtonProps {
 function MatchButton({ children, isDark, isError, onClick, selected }: MatchButtonProps) {
   return (
     <motion.button
-      animate={
-        selected && isError
-          ? {
-              backgroundColor: '#fef2f2',
-              borderColor: '#dc2626',
-              color: '#991b1b',
-              opacity: 1,
-              x: [-5, 5, -5, 5, 0],
-            }
-          : selected
-            ? {
-                backgroundColor: isDark ? '#451a03' : '#fff7ed',
-                borderColor: isDark ? '#f59e0b' : '#c2410c',
-                color: isDark ? '#fef3c7' : '#9a3412',
-                opacity: 1,
-                scale: 1.02,
-              }
-            : {
-                backgroundColor: isDark ? '#1c1917' : '#ffffff',
-                borderColor: isDark ? '#44403c' : '#e7e5e4',
-                color: isDark ? '#f5f5f4' : '#1c1917',
-                opacity: 1,
-                scale: 1,
-              }
-      }
+      animate={selected && isError ? { backgroundColor: '#fef2f2', borderColor: '#dc2626', color: '#991b1b', opacity: 1, x: [-5, 5, -5, 5, 0] } : selected ? { backgroundColor: isDark ? '#451a03' : '#fff7ed', borderColor: isDark ? '#f59e0b' : '#c2410c', color: isDark ? '#fef3c7' : '#9a3412', opacity: 1, scale: 1.02 } : { backgroundColor: isDark ? '#1c1917' : '#ffffff', borderColor: isDark ? '#44403c' : '#e7e5e4', color: isDark ? '#f5f5f4' : '#1c1917', opacity: 1, scale: 1 }}
       aria-pressed={selected}
-      className={`relative flex min-h-20 w-full items-center justify-center rounded-lg border-2 px-3 text-center shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-default sm:min-h-24 ${
-        isDark ? 'focus:ring-amber-500 focus:ring-offset-stone-900' : 'focus:ring-red-700 focus:ring-offset-2'
-      }`}
-      onClick={onClick}
-      transition={{ duration: 0.18 }}
-      type="button"
-      whileHover={{ y: -2 }}
-      whileTap={{ scale: 0.98 }}
+      className={`relative flex min-h-20 w-full items-center justify-center rounded-lg border-2 px-3 text-center shadow-sm transition focus:outline-none focus:ring-2 disabled:cursor-default sm:min-h-24 ${isDark ? 'focus:ring-amber-500' : 'focus:ring-red-700'}`}
+      onClick={onClick} transition={{ duration: 0.18 }} type="button" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }}
     >
       {children}
     </motion.button>
@@ -835,11 +1516,8 @@ interface StatCardProps {
 
 function StatCard({ icon, isDark, label, value }: StatCardProps) {
   return (
-    <div className={`rounded-lg border px-3 py-2 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-300 bg-white'}`}>
-      <div className={`flex items-center gap-2 ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
-        {icon}
-        <span className="text-xs font-bold uppercase tracking-[0.12em]">{label}</span>
-      </div>
+    <div className={`rounded-xl border px-3 py-2 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-200 bg-white'}`}>
+      <div className={`flex items-center gap-2 ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>{icon}<span className="text-xs font-bold uppercase tracking-[0.12em]">{label}</span></div>
       <p className={`mt-1 text-2xl font-bold tabular-nums ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>{value}</p>
     </div>
   );
