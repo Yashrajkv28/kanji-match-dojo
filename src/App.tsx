@@ -12,6 +12,7 @@ import {
   ChevronRight,
   ClipboardList,
   Clock3,
+  Dumbbell,
   Eye,
   Flag,
   Globe2,
@@ -39,6 +40,13 @@ import {
   type CuratedPaper,
   type CuratedPaperSection,
 } from './data/questionPaperGroups';
+import TrainerResults from './trainer/Results';
+import TrainerSetup, { type TrainerPaperSeed } from './trainer/Setup';
+import TrainerTraining from './trainer/Training';
+import TrainerWorksheet from './trainer/Worksheet';
+import { DAILY_EXPRESSION_COUNT, DAILY_EXPRESSION_PAIRS } from './trainer/dailyExpressions';
+import { type GameState as TrainerGameState, type Pair } from './trainer/types';
+import { shuffleArray } from './trainer/utils';
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Kanji deck data (existing HEAD baseline)
@@ -103,12 +111,14 @@ const QUESTION_SETS: QuestionSet[] = [
 const THEME_KEY = 'kanji-matcher-theme';
 const PAPER_PROGRESS_KEY = 'kanji-match-dojo-paper-practice:v1';
 const LANGUAGE_KEY = 'kanji-match-dojo-language:v1';
+const TRAINER_STORAGE_KEY = 'kanji-match-dojo-trainer:v1';
 const ALL_PAPERS_ID = 'all-papers';
 
 type KanjiAppView = 'dashboard' | 'game';
 type PaperAppView = 'paper-dashboard' | 'paper-learn' | 'paper-test' | 'paper-results' | 'paper-browser';
-type AppView = KanjiAppView | PaperAppView;
-type AppMode = 'kanji' | 'papers';
+type TrainerAppView = 'trainer-setup' | 'trainer-training' | 'trainer-worksheet' | 'trainer-results';
+type AppView = KanjiAppView | PaperAppView | TrainerAppView;
+type AppMode = 'kanji' | 'papers' | 'trainer';
 type Theme = 'light' | 'dark';
 type Language = 'en' | 'ja';
 type PaperFilter = 'all' | 'unanswered' | 'wrong' | 'review';
@@ -121,6 +131,11 @@ interface PaperProgressState {
   reviewIds: string[];
   wrongIds: string[];
   answeredIds: string[];
+}
+
+interface TrainerStorageState {
+  bestScore: number | null;
+  pairs: Pair[];
 }
 
 const QUESTION_PAPER_LISTINGS: PaperListing[] = CURATED_PAPERS;
@@ -192,6 +207,9 @@ const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
   'Play again': 'もう一度',
   'Kanji': '漢字',
   'Papers': '過去問',
+  'Trainer': 'トレーナー',
+  'Bulk trainer': '一括トレーナー',
+  'Bulk trainer results': '一括トレーナー結果',
   'Meaning': '意味',
   'Matched': '正解',
   'Misses': 'ミス',
@@ -321,6 +339,62 @@ function getInitialPaperProgress(): PaperProgressState {
   } catch {
     return getDefaultPaperProgress();
   }
+}
+
+function getInitialTrainerStorage(): TrainerStorageState {
+  const stored = window.localStorage.getItem(TRAINER_STORAGE_KEY);
+  if (!stored) return { bestScore: null, pairs: [] };
+  try {
+    const parsed = JSON.parse(stored);
+    const pairs = Array.isArray(parsed.pairs)
+      ? parsed.pairs.filter((pair: Partial<Pair>) => typeof pair.id === 'string' && typeof pair.term === 'string' && typeof pair.definition === 'string')
+      : [];
+    const bestScore = typeof parsed.bestScore === 'number' && Number.isFinite(parsed.bestScore) ? parsed.bestScore : null;
+    return { bestScore, pairs };
+  } catch {
+    return { bestScore: null, pairs: [] };
+  }
+}
+
+function getDefaultTrainerGameState(pairs: Pair[] = []): TrainerGameState {
+  return {
+    pairs,
+    status: 'setup',
+    shuffledTerms: [],
+    shuffledDefinitions: [],
+    userMatches: {},
+  };
+}
+
+function calculateTrainerScore(pairs: Pair[], matches: Record<string, string>): number {
+  if (pairs.length === 0) return 0;
+  const correct = pairs.filter((pair) => matches[pair.id] === pair.id).length;
+  return Math.round((correct / pairs.length) * 100);
+}
+
+function buildTrainerPaperSeeds(): TrainerPaperSeed[] {
+  return CURATED_PAPERS.flatMap((paper) => paper.sections.map((section) => {
+    const pairs = section.questions
+      .filter((question) => question.options.length > 1)
+      .map((question, index) => {
+        const correct = question.options.find((option) => option.isCorrect);
+        return correct
+          ? {
+            id: `${section.id}-trainer-${index}`,
+            term: `${question.number} ${question.prompt}`,
+            definition: correct.text,
+          }
+          : null;
+      })
+      .filter((pair): pair is Pair => pair !== null);
+
+    return {
+      id: `${paper.id}-${section.id}`,
+      label: `${paper.title} - ${section.title}`,
+      subtitle: section.subtitle ?? paper.subtitle ?? 'Curated paper section',
+      pairs,
+    };
+  })).filter((seed) => seed.pairs.length >= 2);
 }
 
 function getPaperScopeKey(paperId: string, sectionId: string): string {
@@ -484,6 +558,9 @@ export default function App() {
   const [paperElapsedSeconds, setPaperElapsedSeconds] = useState(0);
   const [paperBrowserFilter, setPaperBrowserFilter] = useState<PaperFilter>('all');
   const [paperSearch, setPaperSearch] = useState('');
+  const [trainerInitialStorage] = useState<TrainerStorageState>(getInitialTrainerStorage);
+  const [trainerGame, setTrainerGame] = useState<TrainerGameState>(() => getDefaultTrainerGameState(trainerInitialStorage.pairs));
+  const [trainerBestScore, setTrainerBestScore] = useState<number | null>(trainerInitialStorage.bestScore);
 
   const isDark = theme === 'dark';
   const selectedSet = useMemo(() => QUESTION_SETS.find((s) => s.id === selectedSetId), [selectedSetId]);
@@ -507,6 +584,7 @@ export default function App() {
   const paperScopeKey = getPaperScopeKey(selectedPaperId, selectedPaperSection);
   const studiedCount = paperProgress.studiedByScope[paperScopeKey] ?? 0;
   const currentPaperQuestion = paperQuestionSet[paperQuestionIndex];
+  const trainerPaperSeeds = useMemo(() => buildTrainerPaperSeeds(), []);
 
   /* ── Kanji game callbacks ── */
   const initGame = useCallback((questionSet: QuestionSet = activeSet) => {
@@ -536,6 +614,13 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem(PAPER_PROGRESS_KEY, JSON.stringify(paperProgress));
   }, [paperProgress]);
+
+  useEffect(() => {
+    window.localStorage.setItem(TRAINER_STORAGE_KEY, JSON.stringify({
+      bestScore: trainerBestScore,
+      pairs: trainerGame.pairs,
+    }));
+  }, [trainerBestScore, trainerGame.pairs]);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => setShowSplash(false), 1100);
@@ -717,6 +802,68 @@ export default function App() {
     setAppView('paper-learn');
   };
 
+  const startTrainerGame = (pairs: Pair[]) => {
+    setTrainerGame({
+      pairs,
+      status: 'playing',
+      shuffledTerms: shuffleArray([...pairs]),
+      shuffledDefinitions: shuffleArray([...pairs]),
+      userMatches: {},
+    });
+    setAppView('trainer-worksheet');
+  };
+
+  const startTrainerPractice = () => {
+    startTrainerGame(DAILY_EXPRESSION_PAIRS);
+  };
+
+  const startTrainerTraining = () => {
+    setTrainerGame({
+      pairs: DAILY_EXPRESSION_PAIRS,
+      status: 'training',
+      shuffledTerms: [],
+      shuffledDefinitions: [],
+      userMatches: {},
+    });
+    setAppView('trainer-training');
+  };
+
+  const completeTrainerWorksheet = (matches: Record<string, string>) => {
+    const score = calculateTrainerScore(trainerGame.pairs, matches);
+    setTrainerBestScore((previous) => previous === null ? score : Math.max(previous, score));
+    setTrainerGame((previous) => ({
+      ...previous,
+      status: 'results',
+      userMatches: matches,
+    }));
+    setAppView('trainer-results');
+  };
+
+  const retryTrainerWorksheet = () => {
+    setTrainerGame((previous) => ({
+      ...previous,
+      status: 'playing',
+      userMatches: {},
+    }));
+    setAppView('trainer-worksheet');
+  };
+
+  const reshuffleTrainerWorksheet = () => {
+    setTrainerGame((previous) => ({
+      ...previous,
+      status: 'playing',
+      shuffledTerms: shuffleArray([...previous.pairs]),
+      shuffledDefinitions: shuffleArray([...previous.pairs]),
+      userMatches: {},
+    }));
+    setAppView('trainer-worksheet');
+  };
+
+  const resetTrainer = () => {
+    setTrainerGame((previous) => getDefaultTrainerGameState(previous.pairs));
+    setAppView('trainer-setup');
+  };
+
   /* ── Keyboard nav for paper-learn ── */
   useEffect(() => {
     if (appView !== 'paper-learn') return;
@@ -734,7 +881,7 @@ export default function App() {
 
   const switchMode = (next: AppMode) => {
     setAppMode(next);
-    setAppView(next === 'kanji' ? 'dashboard' : 'paper-dashboard');
+    setAppView(next === 'kanji' ? 'dashboard' : next === 'papers' ? 'paper-dashboard' : 'trainer-setup');
   };
 
   useEffect(() => {
@@ -758,6 +905,9 @@ export default function App() {
       } else if (e.key === '2') {
         e.preventDefault();
         switchMode('papers');
+      } else if (e.key === '3') {
+        e.preventDefault();
+        switchMode('trainer');
       } else if (e.key.toLowerCase() === 'r' && currentPaperQuestion && (appView === 'paper-learn' || appView === 'paper-test')) {
         e.preventDefault();
         togglePaperReview(currentPaperQuestion.id);
@@ -771,7 +921,7 @@ export default function App() {
   }, [appView, currentPaperQuestion, showShortcuts]);
 
   /* ── Render ── */
-  const inPaperMode = appMode === 'papers';
+  const dashboardView = appMode === 'kanji' ? 'dashboard' : appMode === 'papers' ? 'paper-dashboard' : 'trainer-setup';
 
   return (
     <div className={isDark ? 'min-h-screen bg-[#12110f] text-stone-100' : 'min-h-screen bg-[#f6f4ef] text-stone-900'}>
@@ -787,7 +937,7 @@ export default function App() {
             appView={appView}
             isDark={isDark}
             language={language}
-            onBackToDashboard={() => setAppView(inPaperMode ? 'paper-dashboard' : 'dashboard')}
+            onBackToDashboard={() => setAppView(dashboardView)}
             onOpenShortcuts={() => setShowShortcuts(true)}
             onSwitchMode={switchMode}
             onToggleLanguage={toggleLanguage}
@@ -906,6 +1056,50 @@ export default function App() {
             wrongIds={wrongIds}
           />
         )}
+
+        {/* Trainer mode */}
+        {appView === 'trainer-setup' && (
+          <TrainerSetup
+            dailyExpressionCount={DAILY_EXPRESSION_COUNT}
+            isDark={isDark}
+            lastPairs={trainerGame.pairs}
+            onStart={startTrainerGame}
+            onStartPractice={startTrainerPractice}
+            onStartTraining={startTrainerTraining}
+            paperSeeds={trainerPaperSeeds}
+          />
+        )}
+        {appView === 'trainer-training' && (
+          <TrainerTraining
+            isDark={isDark}
+            onBack={resetTrainer}
+            onPractice={startTrainerPractice}
+            pairs={trainerGame.pairs.length > 0 ? trainerGame.pairs : DAILY_EXPRESSION_PAIRS}
+          />
+        )}
+        {appView === 'trainer-worksheet' && (
+          <TrainerWorksheet
+            isDark={isDark}
+            onComplete={completeTrainerWorksheet}
+            onReset={resetTrainer}
+            onReshuffle={reshuffleTrainerWorksheet}
+            shuffledDefinitions={trainerGame.shuffledDefinitions}
+            shuffledTerms={trainerGame.shuffledTerms}
+            totalCount={trainerGame.pairs.length}
+          />
+        )}
+        {appView === 'trainer-results' && (
+          <TrainerResults
+            bestScore={trainerBestScore}
+            isDark={isDark}
+            onNew={resetTrainer}
+            onReshuffle={reshuffleTrainerWorksheet}
+            onRetry={retryTrainerWorksheet}
+            shuffledDefinitions={trainerGame.shuffledDefinitions}
+            shuffledTerms={trainerGame.shuffledTerms}
+            userMatches={trainerGame.userMatches}
+          />
+        )}
         </main>
       </TranslatedSurface>
     </div>
@@ -933,6 +1127,12 @@ interface AppHeaderProps {
 function AppHeader({ appMode, appView, isDark, language, onBackToDashboard, onOpenShortcuts, onSwitchMode, onToggleLanguage, onToggleTheme, selectedSet, stats }: AppHeaderProps) {
   const inGame = appView === 'game';
   const inPaperSub = appView === 'paper-learn' || appView === 'paper-test' || appView === 'paper-results' || appView === 'paper-browser';
+  const inTrainerSub = appView === 'trainer-training' || appView === 'trainer-worksheet' || appView === 'trainer-results';
+  const modeLabel = appMode === 'kanji'
+    ? (inGame ? selectedSet.subtitle : 'Kanji match dashboard')
+    : appMode === 'papers'
+      ? 'Question paper practice'
+      : 'Bulk trainer';
 
   return (
     <header className={`flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between ${isDark ? 'border-stone-700' : 'border-stone-300/80'}`}>
@@ -942,7 +1142,7 @@ function AppHeader({ appMode, appView, isDark, language, onBackToDashboard, onOp
         </div>
         <div className="min-w-0">
           <p className={`text-[0.7rem] font-bold uppercase tracking-[0.2em] ${isDark ? 'text-amber-400' : 'text-red-700'}`}>
-            {appMode === 'kanji' ? (inGame ? selectedSet.subtitle : 'Kanji match dashboard') : 'Question paper practice'}
+            {modeLabel}
           </p>
           <h1 className={`bg-gradient-to-r bg-clip-text text-2xl font-bold tracking-normal text-transparent sm:text-3xl ${isDark ? 'from-amber-200 via-amber-100 to-stone-100' : 'from-red-700 via-red-900 to-stone-900'}`}>
             Kanji Match Dojo
@@ -985,9 +1185,21 @@ function AppHeader({ appMode, appView, isDark, language, onBackToDashboard, onOp
             <ClipboardList size={15} />
             Papers
           </button>
+          <button
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition sm:h-10 sm:px-4 ${
+              appMode === 'trainer'
+                ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'
+                : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
+            }`}
+            onClick={() => onSwitchMode('trainer')}
+            type="button"
+          >
+            <Dumbbell size={15} />
+            Trainer
+          </button>
         </div>
 
-        {(inGame || inPaperSub) && (
+        {(inGame || inPaperSub || inTrainerSub) && (
           <button
             className={`inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-semibold transition ${
               isDark ? 'border-stone-700 bg-stone-900 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-900 hover:bg-stone-100'
@@ -1091,7 +1303,7 @@ function KeyboardShortcutsModal({ appMode, appView, isDark, onClose }: { appMode
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>
-              {appMode === 'kanji' ? 'Kanji' : 'Papers'}
+              {appMode === 'kanji' ? 'Kanji' : appMode === 'papers' ? 'Papers' : 'Trainer'}
             </p>
             <h2 className="mt-1 text-xl font-bold">Keyboard shortcuts</h2>
           </div>

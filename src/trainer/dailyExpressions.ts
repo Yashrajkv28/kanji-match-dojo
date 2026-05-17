@@ -1,5 +1,5 @@
-import rawExpressions from '../daily expression.json';
-import { Pair } from './types';
+import rawExpressions from './dailyExpressions.json';
+import { type Pair } from './types';
 
 interface DailyExpression {
   english: string;
