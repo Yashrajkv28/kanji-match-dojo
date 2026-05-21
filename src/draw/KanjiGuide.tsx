@@ -146,7 +146,9 @@ export function KanjiGuide({ kanji, strokes, isDark, size = 320 }: KanjiGuidePro
   const startPoint = activeIndex >= 0 ? strokeStart(strokes[activeIndex]) : null;
   const showActive = activeIndex >= 0 && !finished;
 
-  const btnBase = `inline-flex h-9 w-9 items-center justify-center rounded-xl border text-sm transition disabled:opacity-40 ${
+  // `touch-manipulation` + `select-none` keep iOS Safari from intercepting the
+  // first tap with double-tap-zoom / text-selection callouts.
+  const btnBase = `inline-flex h-9 w-9 touch-manipulation select-none items-center justify-center rounded-xl border text-sm transition disabled:opacity-40 ${
     isDark
       ? 'border-stone-700 bg-stone-950 text-stone-100 hover:bg-stone-800'
       : 'border-stone-200 bg-white text-stone-900 hover:bg-stone-100'
@@ -176,7 +178,7 @@ export function KanjiGuide({ kanji, strokes, isDark, size = 320 }: KanjiGuidePro
           viewBox={`0 0 ${KANJI_VIEWBOX} ${KANJI_VIEWBOX}`}
           width={size}
           height={size}
-          className="relative"
+          className="relative touch-none select-none"
           fill="none"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -217,18 +219,21 @@ export function KanjiGuide({ kanji, strokes, isDark, size = 320 }: KanjiGuidePro
             />
           )}
 
-          {/* Pulsing dot marking where the active stroke begins. */}
+          {/* Pulsing dot marking where the active stroke begins.
+              Note: we animate `r` (and opacity) rather than `scale` on purpose —
+              iOS Safari mis-composites SVG elements with pixel `transform-origin`
+              under an infinite-loop scale animation, which can drop the whole
+              <svg> layer on first interaction. */}
           {showActive && startPoint && (
             <motion.circle
               key={`dot-${kanji}-${revealed}`}
               cx={startPoint.x}
               cy={startPoint.y}
-              r={4}
               fill={dotColor}
-              initial={{ scale: 0.6, opacity: 0.4 }}
-              animate={{ scale: [0.7, 1.25, 0.9], opacity: [0.5, 1, 0.85] }}
+              pointerEvents="none"
+              initial={{ r: 3, opacity: 0.4 }}
+              animate={{ r: [3, 5.5, 4], opacity: [0.5, 1, 0.85] }}
               transition={{ duration: 0.9, repeat: Infinity, repeatType: 'reverse' }}
-              style={{ transformOrigin: `${startPoint.x}px ${startPoint.y}px` }}
             />
           )}
         </svg>
@@ -261,7 +266,7 @@ export function KanjiGuide({ kanji, strokes, isDark, size = 320 }: KanjiGuidePro
           type="button"
           onClick={handlePlayPause}
           aria-label={playing ? 'Pause' : 'Play'}
-          className={`inline-flex h-9 items-center gap-1.5 rounded-xl px-4 text-sm font-bold transition ${
+          className={`inline-flex h-9 touch-manipulation select-none items-center gap-1.5 rounded-xl px-4 text-sm font-bold transition ${
             isDark
               ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400'
               : 'bg-emerald-700 text-white hover:bg-emerald-600'
