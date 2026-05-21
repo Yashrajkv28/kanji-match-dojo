@@ -1,0 +1,5 @@
+tmp/
+.claude/
+Screenshot*.png
+Japanese_Practice_QBank.html
+src/data/.synctest.ts

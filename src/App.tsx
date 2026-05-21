@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import {
   Layers3,
   ListFilter,
   Moon,
+  PenTool,
   Play,
   RefreshCw,
   RotateCcw,
@@ -48,6 +49,9 @@ import TrainerWorksheet from './trainer/Worksheet';
 import { DAILY_EXPRESSION_COUNT, DAILY_EXPRESSION_PAIRS } from './trainer/dailyExpressions';
 import { type GameState as TrainerGameState, type Pair } from './trainer/types';
 import { shuffleArray } from './trainer/utils';
+import { DRAW_KANJI, getDrawKanjiById } from './draw/kanjiData';
+import { DrawDashboard, DrawPractice, DRAW_PROGRESS_KEY, getDefaultDrawProgress, loadDrawProgress, type DrawProgressState } from './draw/DrawViews';
+import { type GradeResult } from './draw/scoring';
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Kanji deck data (existing HEAD baseline)
@@ -109,6 +113,11 @@ const QUESTION_SETS: QuestionSet[] = [
    Storage + view types
    ─────────────────────────────────────────────────────────────────────────── */
 
+// Feature flag — paper test mode is implemented but disabled in the UI for
+// now; only paper review is exposed. Flip to true to re-enable test entry
+// points without touching the underlying screens.
+const PAPER_TEST_ENABLED = false;
+
 const THEME_KEY = 'kanji-matcher-theme';
 const PAPER_PROGRESS_KEY = 'kanji-match-dojo-paper-practice:v1';
 const LANGUAGE_KEY = 'kanji-match-dojo-language:v1';
@@ -119,8 +128,9 @@ const ALL_PAPERS_ID = 'all-papers';
 type KanjiAppView = 'dashboard' | 'game';
 type PaperAppView = 'paper-dashboard' | 'paper-learn' | 'paper-test' | 'paper-results' | 'paper-browser';
 type TrainerAppView = 'trainer-setup' | 'trainer-training' | 'trainer-worksheet' | 'trainer-results';
-type AppView = KanjiAppView | PaperAppView | TrainerAppView;
-type AppMode = 'kanji' | 'papers' | 'trainer';
+type DrawAppView = 'draw-dashboard' | 'draw-practice';
+type AppView = KanjiAppView | PaperAppView | TrainerAppView | DrawAppView;
+type AppMode = 'kanji' | 'papers' | 'trainer' | 'draw';
 type Theme = 'light' | 'dark';
 type Language = 'en' | 'ja';
 type PaperFilter = 'all' | 'unanswered' | 'wrong' | 'review';
@@ -191,7 +201,6 @@ const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
   'Question paper practice': '過去問練習',
   'Question Paper Practice': '過去問練習',
   'Choose a question set': '問題セットを選ぶ',
-  'Pick a deck to drill kanji â†” meaning matching.': '漢字と意味を結びつけるデッキを選びます。',
   'Pick a deck to drill kanji ↔ meaning matching.': '漢字と意味を結びつけるデッキを選びます。',
   'Selected deck': '選択中のデッキ',
   'No deck selected': 'デッキ未選択',
@@ -212,12 +221,50 @@ const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
   'Trainer': 'トレーナー',
   'Bulk trainer': '一括トレーナー',
   'Bulk trainer results': '一括トレーナー結果',
+  'Build a matching worksheet': 'マッチング練習を作成',
+  'Paste pairs, use the daily expressions, or seed from an MCQ section.': 'ペアを貼り付ける、日常表現を使う、またはMCQセクションから作成できます。',
+  'Study daily expressions': '日常表現を学習',
+  'Practice daily expressions': '日常表現を練習',
+  'Start a shuffled worksheet immediately.': 'シャッフルされた練習をすぐに始めます。',
+  'Custom pairs': 'カスタムペア',
+  'Supported separators: dash, tab, or comma.': '区切り文字: ダッシュ、タブ、コンマ。',
+  'Bulk input': '一括入力',
+  'Manual entry': '手入力',
+  'Load sample': '例を読み込む',
+  'Load last set': '前回のセット',
+  'Seed from papers': '過去問から作成',
+  'Start practice': '練習開始',
+  'Term': '用語',
+  'Definition': '定義',
+  'Add row': '行を追加',
+  'Please add at least 2 pairs to start.': '開始するには少なくとも2組のペアを追加してください。',
+  'Training module': '学習モジュール',
+  'Study each pair': '各ペアを学習',
+  'Modules': 'モジュール',
+  'Practice': '練習',
+  'Shuffle study': '学習順をシャッフル',
+  'Column A': '列A',
+  'Column B': '列B',
+  'Matching exercise': 'マッチング練習',
+  'Match Column A to Column B': '列Aと列Bをマッチ',
+  'Pick a term, then choose its matching definition.': '用語を選び、対応する定義を選んでください。',
+  'Edit setup': '設定を編集',
+  'Reshuffle': 'シャッフル',
+  'Clear': 'クリア',
+  'Check answers': '答え合わせ',
+  'Correct': '正解',
+  'Wrong, try again': '不正解、もう一度',
+  'New worksheet': '新しい練習',
+  'Retry same set': '同じセットを再挑戦',
+  'Best score: Not set': '最高スコア: 未設定',
+  'Apple - A red fruit\nBanana - A yellow fruit': 'りんご - 赤い果物\nバナナ - 黄色い果物',
   'Meaning': '意味',
   'Matched': '正解',
   'Misses': 'ミス',
   'Accuracy': '正答率',
   'Time': '時間',
   'Reset': 'リセット',
+  'Shuffle': 'シャッフル',
   'Dashboard': 'ダッシュボード',
   'Light': 'ライト',
   'Dark': 'ダーク',
@@ -239,6 +286,13 @@ const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
   'Close': '閉じる',
   'Skip': 'スキップ',
   'Pick a paper': '過去問を選ぶ',
+  'Search papers': '過去問を検索',
+  'All': 'すべて',
+  'SEE': 'SEE',
+  'Mid-sem': '中間試験',
+  'Pre-test': '事前テスト',
+  'Patterns': 'パターン',
+  'No papers match the current filters.': '現在の条件に一致する過去問はありません。',
   'View questions': '問題を見る',
   'View opened questions': '開いている問題を見る',
   'Opened paper': '開いている過去問',
@@ -253,22 +307,36 @@ const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
   'Test section': 'セクションテスト',
   'Practice review-later': '後で復習を練習',
   'All papers aggregate': '全過去問の集計',
+  'All question papers': 'すべての過去問',
+  'Aggregate practice scope': '集計練習範囲',
+  'All curated papers combined into one review and test scope.': 'すべての厳選過去問を1つの復習・テスト範囲にまとめます。',
+  'Aggregate summary': '集計サマリー',
+  'Section actions': 'セクション操作',
   'Sections': 'セクション',
   'Full paper': '全問',
   'Opened': '開いています',
   'Back': '戻る',
   'Mark for review': '復習に追加',
   'Marked': '追加済み',
+  'Default reveal': '最初から答えを表示',
+  'Answer shown': '答え表示中',
+  'Show answer': '答えを見る',
   'Test these': 'これをテスト',
   'No questions in scope': 'この範囲に問題はありません',
   'Try a different paper or section.': '別の過去問またはセクションを選んでください。',
   'Answer': '答え',
+  'Previous preview': '前の問題プレビュー',
+  'Next preview': '次の問題プレビュー',
+  'Start of section': 'セクションの先頭',
+  'End of section': 'セクションの最後',
   'Previous': '前へ',
   'Next': '次へ',
   'to navigate': 'で移動',
   'No questions available.': '問題がありません。',
   'Submit': '提出',
-  'Descriptive question â€” review the answer in Learn mode.': '記述問題です。学習モードで答えを確認してください。',
+  'Cancel': 'キャンセル',
+  'Submit anyway': 'それでも提出',
+  'Unanswered questions will stay out of the score.': '未回答の問題はスコアに含まれません。',
   'Descriptive question — review the answer in Learn mode.': '記述問題です。学習モードで答えを確認してください。',
   'Results': '結果',
   'Retry': '再挑戦',
@@ -283,12 +351,130 @@ const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
   'Mark': '追加',
   'No questions match the current filter.': '現在のフィルターに一致する問題はありません。',
   'PaperKind.SEE': 'SEE',
+
+  // ─── Draw module — chrome, controls, instructional text ──────────────────
+  'Draw': '書く',
+  'Kanji drawing': '漢字書き',
+  'Kanji Drawing': '漢字書き',
+  'Trace, freehand, score': 'なぞる・自由書き・採点',
+  'Trace': 'なぞる',
+  'Freehand': '自由書き',
+  'Guide': 'ガイド',
+  'Eraser': '消しゴム',
+  'Erasing': '消去中',
+  'Grade': '採点',
+  'Undo': '元に戻す',
+  'All kanji': 'すべての漢字',
+  'Try again': 'もう一度',
+  'Trace the faint kanji': '薄い見本をなぞる',
+  'Draw from memory': '記憶から書く',
+  'Watch the stroke order': '書き順を見る',
+  'Ready when you are': '準備ができたら',
+  'Draw the kanji': '漢字を書く',
+  'Each pointer-down to pointer-up counts as one stroke. Lift between strokes so the count is accurate, then hit Grade.':
+    '画面に触れて離すまでが1画として数えられます。画と画の間で指を離して画数を正しく保ち、最後に「採点」を押してください。',
+  'Stroke count': '画数',
+  'Your score': 'あなたのスコア',
+  'out of 100': '/ 100',
+  'Shape (IoU)': '形状（IoU）',
+  'Strokes': '画数',
+  'How it works': '使い方',
+  'Pick a kanji and start': '漢字を選んで始める',
+  'In Trace mode a faint reference sits behind the canvas — draw on top. In Freehand mode the reference hides; draw from memory. Hit Grade to get an instant score.':
+    'なぞるモードではキャンバスの後ろに薄い見本が表示されるので、その上から書きます。自由書きモードでは見本は隠れるので、記憶から書きます。「採点」を押せばすぐにスコアが出ます。',
+  '• Shape match via pixel overlap (IoU).': '• ピクセルの重なり（IoU）で形状を判定。',
+  '• Bonus for the correct stroke count.': '• 画数が正しいとボーナス。',
+  '• Best score per kanji is saved automatically.': '• 漢字ごとの最高スコアは自動保存。',
+  'mastered at 80%+': '80%以上で習得',
+
+  // Guide mode aside
+  'Stroke order': '書き順',
+  'Follow the guide': 'ガイドに従う',
+  'Press Play to watch the kanji drawn in the correct order, or use the arrows to step through one stroke at a time.':
+    '「再生」を押すと漢字が正しい書き順で描かれます。矢印で1画ずつ進めることもできます。',
+  '• The green dot marks where each stroke starts.': '• 緑の点が各画の開始位置を示します。',
+  '• Strokes ink on in the canonical writing order.': '• 正しい書き順で線が描かれます。',
+  '• Faint lines preview strokes not yet drawn.': '• 薄い線はまだ書かれていない画のプレビューです。',
+  "Switch to Trace or Freehand when you're ready to draw.": '書く準備ができたら、なぞるか自由書きに切り替えてください。',
+
+  // KanjiGuide controls (aria-label + button text)
+  'Restart': 'やり直し',
+  'Previous stroke': '前の画',
+  'Pause': '一時停止',
+  'Play': '再生',
+  'Next stroke': '次の画',
+  'Replay': 'もう一度',
+
+  // Scoring critique notes
+  'Excellent shape match.': '形状が非常によく一致しています。',
+  'Good shape match. A few details are off.': '形状はよく一致しています。細部に少しずれがあります。',
+  'Outline is close but parts of the kanji are missing or oversized.': '輪郭は近いですが、一部が欠けているか大きすぎます。',
+  'The shape is quite different from the reference. Try making strokes the same size and in roughly the same position.':
+    '形状が見本とかなり異なります。各画を同じ大きさ・位置で書いてみましょう。',
+
+  // ─── Beginner Essentials kanji content (meanings + readings) ─────────────
+  'One': '一',
+  'Two': '二',
+  'Three': '三',
+  'Four': '四',
+  'Five': '五',
+  'Six': '六',
+  'Seven': '七',
+  'Eight': '八',
+  'Nine': '九',
+  'Ten': '十',
+  'Person': '人',
+  'Above / Up': '上',
+  'Below / Down': '下',
+  'Mouth': '口',
+  'Mountain': '山',
+  'River': '川',
+  'Fire': '火',
+  'Water': '水',
+  'Wood': '木',
+  'Sun / Day': '日',
+  'Moon': '月',
+  'Rain': '雨',
+  'ichi': 'いち',
+  'ni': 'に',
+  'san': 'さん',
+  'yon / shi': 'よん / し',
+  'go': 'ご',
+  'roku': 'ろく',
+  'nana / shichi': 'なな / しち',
+  'hachi': 'はち',
+  'kyu': 'きゅう',
+  'ju': 'じゅう',
+  'hito': 'ひと',
+  'ue': 'うえ',
+  'shita': 'した',
+  'kuchi': 'くち',
+  'yama': 'やま',
+  'kawa': 'かわ',
+  'hi': 'ひ',
+  'mizu': 'みず',
+  'ki': 'き',
+  'hi / nichi': 'ひ / にち',
+  'tsuki': 'つき',
+  'ame': 'あめ',
 };
 
 const JAPANESE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/^(\d+) remaining in (.+)$/u, '$1 問残り（$2）'],
   [/^Finished in (.+) with (\d+) misses\.$/u, '$1 で完了、ミス $2 回。'],
-  [/^(\d+) curated papers Â· (\d+) questions Â· (\d+) flagged for review$/u, '$1 件の過去問・$2 問・復習 $3 件'],
+  [/^(\d+)\/(\d+) matched last run$/u, '前回 $1/$2 マッチ'],
+  [/^(\d+) \/ (\d+) matched$/u, '$1 / $2 マッチ済み'],
+  [/^(\d+) \/ (\d+) answered$/u, '$1 / $2 回答済み'],
+  [/^Submit with (\d+) unanswered\?$/u, '未回答 $1 問のまま提出しますか？'],
+  [/^You got (\d+) out of (\d+) correct\.$/u, '$2 問中 $1 問正解です。'],
+  [/^Best score: (\d+)%$/u, '最高スコア: $1%'],
+  [/^(\d+) pairs$/u, '$1 ペア'],
+  [/^(\d+) bundled sentence pairs\.$/u, '収録文ペア $1 組。'],
+  [/^(.+) · (\d+) pairs$/u, '$1・$2 ペア'],
+  [/^(\d+) sentence pairs to match\.$/u, '$1 組の文ペアをマッチします。'],
+  [/^(\d+) total questions across (\d+) curated papers\.$/u, '厳選過去問 $2 件、合計 $1 問。'],
+  [/^(\d+) reviewed$/u, '$1 件復習済み'],
+  [/^\(\+(\d+) reviewed\)$/u, '（+$1 件復習）'],
   [/^(\d+) curated papers · (\d+) questions · (\d+) flagged for review$/u, '$1 件の過去問・$2 問・復習 $3 件'],
   [/^(\d+) questions$/u, '$1 問'],
   [/^(\d+) section$/u, '$1 セクション'],
@@ -297,13 +483,19 @@ const JAPANESE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/^(\d+) to review$/u, '復習 $1 件'],
   [/^(\d+) wrong$/u, '誤答 $1 件'],
   [/^Reviewed (\d+)\/(\d+)$/u, '復習済み $1/$2'],
-  [/^(\d+)\/(\d+) reviewed Â· (.+)$/u, '$1/$2 復習済み・$3'],
   [/^(\d+)\/(\d+) reviewed · (.+)$/u, '$1/$2 復習済み・$3'],
   [/^Practice review-later \((\d+)\)$/u, '後で復習を練習（$1）'],
-  [/^Sections Â· (\d+)$/u, 'セクション・$1'],
   [/^Sections · (\d+)$/u, 'セクション・$1'],
-  [/^(\d+) of (\d+) correct Â· (\d+)% Â· (.+)$/u, '$2 問中 $1 問正解・$3%・$4'],
   [/^(\d+) of (\d+) correct · (\d+)% · (.+)$/u, '$2 問中 $1 問正解・$3%・$4'],
+
+  // Draw module compound strings
+  [/^(\d+) characters · (\d+) mastered \(≥80%\) · (\d+) attempts$/u, '$1 文字・$2 習得（80%以上）・$3 回挑戦'],
+  [/^Stroke count is correct \((\d+)\)\.$/u, '画数は正しいです（$1）。'],
+  [/^You used (\d+) more strokes? than expected \((\d+)\)\.$/u, '見本（$2）より $1 画多く書いています。'],
+  [/^You used (\d+) fewer strokes? than expected \((\d+)\)\.$/u, '見本（$2）より $1 画少なく書いています。'],
+  [/^(\d+) strokes? · (.+)$/u, '$1 画・$2'],
+  [/^· (\d+)%$/u, '・$1%'],
+  [/^(\d+) strokes?$/u, '$1 画'],
 ];
 
 function translateToJapanese(value: string): string {
@@ -468,22 +660,31 @@ function getSectionLabel(paperId: string, sectionId: string): string {
   return section?.title ?? 'Selected section';
 }
 
+const TRANSLATE_OBSERVE_OPTIONS: MutationObserverInit = {
+  childList: true,
+  subtree: true,
+  characterData: true,
+  attributes: true,
+  attributeFilter: ['placeholder', 'aria-label', 'title'],
+};
+
 function TranslatedSurface({ children, language }: { children: ReactNode; language: Language }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const textOriginals = useRef(new WeakMap<Text, string>());
 
-  useEffect(() => {
+  // useLayoutEffect runs before the browser paints, so switching language
+  // never flashes the untranslated English text first.
+  useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return undefined;
 
     const translateTextNode = (node: Text) => {
       const current = node.nodeValue ?? '';
       const stored = textOriginals.current.get(node);
-      if (stored === undefined) {
-        textOriginals.current.set(node, current);
-      } else if (language === 'ja' && current !== translateToJapanese(stored)) {
-        textOriginals.current.set(node, current);
-      } else if (language === 'en' && current !== stored) {
+      // (Re)capture the English original the first time we see a node, or
+      // when React has replaced it with genuinely new content — never when
+      // `current` is just our own translation of the stored original.
+      if (stored === undefined || (current !== stored && current !== translateToJapanese(stored))) {
         textOriginals.current.set(node, current);
       }
 
@@ -528,9 +729,15 @@ function TranslatedSurface({ children, language }: { children: ReactNode; langua
       root.querySelectorAll('[placeholder], [aria-label], [title]').forEach(translateElementAttributes);
     };
 
+    // Pause the observer around our own writes so it never re-fires on the
+    // translations we just applied (which would re-walk the whole tree).
+    const observer = new MutationObserver(() => {
+      observer.disconnect();
+      applyTranslations();
+      observer.observe(root, TRANSLATE_OBSERVE_OPTIONS);
+    });
     applyTranslations();
-    const observer = new MutationObserver(() => applyTranslations());
-    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['placeholder', 'aria-label', 'title'] });
+    observer.observe(root, TRANSLATE_OBSERVE_OPTIONS);
     return () => observer.disconnect();
   }, [language]);
 
@@ -576,6 +783,10 @@ export default function App() {
   const [trainerInitialStorage] = useState<TrainerStorageState>(getInitialTrainerStorage);
   const [trainerGame, setTrainerGame] = useState<TrainerGameState>(() => getDefaultTrainerGameState(trainerInitialStorage.pairs));
   const [trainerBestScore, setTrainerBestScore] = useState<number | null>(trainerInitialStorage.bestScore);
+
+  // Draw-mode state
+  const [drawProgress, setDrawProgress] = useState<DrawProgressState>(() => loadDrawProgress());
+  const [selectedDrawKanjiId, setSelectedDrawKanjiId] = useState<number | null>(null);
 
   const isDark = theme === 'dark';
   const selectedSet = useMemo(() => QUESTION_SETS.find((s) => s.id === selectedSetId), [selectedSetId]);
@@ -648,6 +859,10 @@ export default function App() {
       pairs: trainerGame.pairs,
     }));
   }, [trainerBestScore, trainerGame.pairs]);
+
+  useEffect(() => {
+    window.localStorage.setItem(DRAW_PROGRESS_KEY, JSON.stringify(drawProgress));
+  }, [drawProgress]);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => setShowSplash(false), 1100);
@@ -768,6 +983,11 @@ export default function App() {
   };
 
   const openPaperTest = (paperId = selectedPaperId, sectionId = selectedPaperSection, questions?: PaperQuestion[]) => {
+    if (!PAPER_TEST_ENABLED) {
+      // Test mode is feature-flagged off — keep the underlying screens
+      // implemented but ignore entry attempts.
+      return;
+    }
     const next = questions ?? updatePaperScope(paperId, sectionId);
     setPaperQuestionSet(next);
     setPaperQuestionIndex(0);
@@ -927,7 +1147,45 @@ export default function App() {
 
   const switchMode = (next: AppMode) => {
     setAppMode(next);
-    setAppView(next === 'kanji' ? 'dashboard' : next === 'papers' ? 'paper-dashboard' : 'trainer-setup');
+    setAppView(
+      next === 'kanji' ? 'dashboard'
+      : next === 'papers' ? 'paper-dashboard'
+      : next === 'trainer' ? 'trainer-setup'
+      : 'draw-dashboard'
+    );
+  };
+
+  // Launch the trainer directly from the kanji dashboard card. Seeds with
+  // the daily expression pack and jumps to the worksheet so it feels like a
+  // deck, not a separate tool.
+  const launchDailyExpressions = () => {
+    const pairs = shuffleArray([...DAILY_EXPRESSION_PAIRS]);
+    setTrainerGame({
+      pairs,
+      status: 'playing',
+      shuffledTerms: shuffleArray([...pairs]),
+      shuffledDefinitions: shuffleArray([...pairs]),
+      userMatches: {},
+    });
+    setAppMode('trainer');
+    setAppView('trainer-worksheet');
+  };
+
+  /* ── Draw-mode handlers ── */
+  const openDrawPractice = (kanjiId: number) => {
+    setSelectedDrawKanjiId(kanjiId);
+    setAppView('draw-practice');
+  };
+
+  const recordDrawScore = (kanji: string, result: GradeResult) => {
+    setDrawProgress((prev) => {
+      const prevBest = prev.bestScoreByKanji[kanji] ?? 0;
+      const nextBest = Math.max(prevBest, result.score);
+      return {
+        bestScoreByKanji: { ...prev.bestScoreByKanji, [kanji]: nextBest },
+        attemptsByKanji: { ...prev.attemptsByKanji, [kanji]: (prev.attemptsByKanji[kanji] ?? 0) + 1 },
+      };
+    });
   };
 
   useEffect(() => {
@@ -953,7 +1211,7 @@ export default function App() {
         switchMode('papers');
       } else if (e.key === '3') {
         e.preventDefault();
-        switchMode('trainer');
+        switchMode('draw');
       } else if (e.key.toLowerCase() === 'r' && currentPaperQuestion && (appView === 'paper-learn' || appView === 'paper-test')) {
         e.preventDefault();
         togglePaperReview(currentPaperQuestion.id);
@@ -967,7 +1225,13 @@ export default function App() {
   }, [appView, currentPaperQuestion, showShortcuts]);
 
   /* ── Render ── */
-  const dashboardView = appMode === 'kanji' ? 'dashboard' : appMode === 'papers' ? 'paper-dashboard' : 'trainer-setup';
+  // Trainer mode is now launched as a deck from the kanji dashboard rather
+  // than as its own top-level tab, so the back button from trainer screens
+  // returns the user to the kanji dashboard.
+  const dashboardView: AppView = appMode === 'kanji' ? 'dashboard'
+    : appMode === 'papers' ? 'paper-dashboard'
+    : appMode === 'trainer' ? 'dashboard'
+    : 'draw-dashboard';
 
   return (
     <div className={isDark ? 'min-h-screen bg-[#12110f] text-stone-100' : 'min-h-screen bg-[#f6f4ef] text-stone-900'}>
@@ -996,12 +1260,15 @@ export default function App() {
         {appView === 'dashboard' && (
           <Dashboard
             bestTime={bestTime}
+            dailyExpressionCount={DAILY_EXPRESSION_COUNT}
             isDark={isDark}
+            onLaunchDailyExpressions={launchDailyExpressions}
             onSelectSet={handleSelectSet}
             onStartSet={handleStartSet}
             progressBySet={kanjiRunProgress}
             questionSets={QUESTION_SETS}
             selectedSetId={selectedSetId}
+            trainerBestScore={trainerBestScore}
           />
         )}
         {appView === 'game' && (
@@ -1152,6 +1419,28 @@ export default function App() {
             userMatches={trainerGame.userMatches}
           />
         )}
+
+        {appView === 'draw-dashboard' && (
+          <DrawDashboard
+            isDark={isDark}
+            onSelect={openDrawPractice}
+            progress={drawProgress}
+            selectedId={selectedDrawKanjiId}
+          />
+        )}
+
+        {appView === 'draw-practice' && selectedDrawKanjiId !== null && (() => {
+          const k = getDrawKanjiById(selectedDrawKanjiId) ?? DRAW_KANJI[0];
+          return (
+            <DrawPractice
+              isDark={isDark}
+              kanji={k}
+              onBack={() => setAppView('draw-dashboard')}
+              onScore={(result) => recordDrawScore(k.kanji, result)}
+              onSelectKanji={openDrawPractice}
+            />
+          );
+        })()}
         </main>
       </TranslatedSurface>
     </div>
@@ -1180,11 +1469,14 @@ function AppHeader({ appMode, appView, isDark, language, onBackToDashboard, onOp
   const inGame = appView === 'game';
   const inPaperSub = appView === 'paper-learn' || appView === 'paper-test' || appView === 'paper-results' || appView === 'paper-browser';
   const inTrainerSub = appView === 'trainer-training' || appView === 'trainer-worksheet' || appView === 'trainer-results';
+  const inDrawSub = appView === 'draw-practice';
   const modeLabel = appMode === 'kanji'
     ? (inGame ? selectedSet.subtitle : 'Kanji match dashboard')
     : appMode === 'papers'
       ? 'Question paper practice'
-      : 'Bulk trainer';
+      : appMode === 'trainer'
+        ? 'Common daily expressions'
+        : 'Kanji drawing';
 
   return (
     <header className={`flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between ${isDark ? 'border-stone-700' : 'border-stone-300/80'}`}>
@@ -1239,19 +1531,19 @@ function AppHeader({ appMode, appView, isDark, language, onBackToDashboard, onOp
           </button>
           <button
             className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition sm:h-10 sm:px-4 ${
-              appMode === 'trainer'
-                ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'
+              appMode === 'draw'
+                ? isDark ? 'bg-emerald-500 text-stone-950' : 'bg-emerald-700 text-white'
                 : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
             }`}
-            onClick={() => onSwitchMode('trainer')}
+            onClick={() => onSwitchMode('draw')}
             type="button"
           >
-            <Dumbbell size={15} />
-            Trainer
+            <PenTool size={15} />
+            Draw
           </button>
         </div>
 
-        {(inGame || inPaperSub || inTrainerSub) && (
+        {(inGame || inPaperSub || inTrainerSub || inDrawSub) && (
           <button
             className={`inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-semibold transition ${
               isDark ? 'border-stone-700 bg-stone-900 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-900 hover:bg-stone-100'
@@ -1322,7 +1614,7 @@ function KeyboardShortcutsModal({ appMode, appView, isDark, onClose }: { appMode
     { keyName: '?', action: 'Open shortcuts' },
     { keyName: 'Esc', action: 'Close' },
     { keyName: 'M', action: 'Toggle theme' },
-    { keyName: '1 / 2 / 3', action: 'Switch mode' },
+    { keyName: '1 / 2 / 3', action: 'Switch mode (Kanji / Papers / Draw)' },
   ];
 
   if (appView === 'paper-learn') {
@@ -1386,15 +1678,18 @@ function KeyboardShortcutsModal({ appMode, appView, isDark, onClose }: { appMode
 
 interface DashboardProps {
   bestTime: number | null;
+  dailyExpressionCount: number;
   isDark: boolean;
+  onLaunchDailyExpressions: () => void;
   onSelectSet: (setId: string) => void;
   onStartSet: (setId: string) => void;
   progressBySet: Record<string, number>;
   questionSets: QuestionSet[];
   selectedSetId: string | null;
+  trainerBestScore: number | null;
 }
 
-function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, progressBySet, questionSets, selectedSetId }: DashboardProps) {
+function Dashboard({ bestTime, dailyExpressionCount, isDark, onLaunchDailyExpressions, onSelectSet, onStartSet, progressBySet, questionSets, selectedSetId, trainerBestScore }: DashboardProps) {
   const selectedSet = questionSets.find((s) => s.id === selectedSetId);
 
   return (
@@ -1438,6 +1733,42 @@ function Dashboard({ bestTime, isDark, onSelectSet, onStartSet, progressBySet, q
               </button>
             );
           })}
+
+          {/* Common Daily Expressions — launches the trainer worksheet inline,
+              styled as a deck card so it lives alongside the kanji decks. */}
+          <button
+            className={`group relative overflow-hidden rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 ${
+              isDark
+                ? 'border-stone-800 bg-stone-950 hover:border-sky-500/60 focus:ring-sky-500'
+                : 'border-stone-200 bg-white hover:border-sky-400 focus:ring-sky-600'
+            }`}
+            onClick={(e) => { e.stopPropagation(); onLaunchDailyExpressions(); }}
+            type="button"
+          >
+            <span
+              aria-hidden
+              className={`pointer-events-none absolute -right-12 -top-12 h-36 w-36 rounded-full bg-gradient-to-br ${isDark ? 'from-sky-400/40' : 'from-sky-400/30'} to-transparent blur-2xl`}
+            />
+            <div className="relative mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className={`text-[0.7rem] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-sky-300' : 'text-sky-700'}`}>Daily expressions</p>
+                <h3 className={`mt-1 text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Common Daily Expressions</h3>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-bold ${isDark ? 'bg-sky-500/20 text-sky-200' : 'bg-sky-100 text-sky-800'}`}>{dailyExpressionCount}</span>
+            </div>
+            <p className={`relative text-sm leading-6 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>
+              Bulk-trainer style match-the-pair drill seeded with everyday Japanese phrases — perfect for quick daily reps.
+            </p>
+            <div className={`relative mt-4 flex flex-wrap items-center gap-2 text-[0.72rem] font-semibold ${isDark ? 'text-stone-400' : 'text-stone-500'}`}>
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${isDark ? 'border-sky-700/60 bg-sky-950/40 text-sky-200' : 'border-sky-200 bg-sky-50 text-sky-800'}`}>
+                <Dumbbell size={11} /> Worksheet
+              </span>
+              {trainerBestScore !== null && (
+                <span>Best score · <span className="tabular-nums">{trainerBestScore}%</span></span>
+              )}
+            </div>
+            <p className={`relative mt-5 text-2xl font-semibold tracking-normal ${isDark ? 'text-stone-100' : 'text-stone-900'}`}>こんにちは · ありがとう · さようなら</p>
+          </button>
         </div>
       </div>
       <aside className={`rounded-2xl border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-200 bg-white'}`}>
@@ -1728,13 +2059,31 @@ function PaperPracticeDashboard({
 
           <div className="mt-5 grid gap-2">
             <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 ${isDark ? 'bg-gradient-to-r from-amber-400 to-amber-500 text-stone-950 hover:from-amber-300 hover:to-amber-400' : 'bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-500 hover:to-red-600'}`} onClick={() => onLearn(selectedPaperId, 'all')} type="button"><BookOpen size={16} />Full paper review</button>
-            <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onStartTest(selectedPaperId, 'all')} type="button"><ClipboardList size={16} />Full paper test</button>
+            <button
+              className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${isDark ? 'border-stone-800 bg-stone-950/40 text-stone-500' : 'border-stone-200 bg-stone-100 text-stone-400'} cursor-not-allowed`}
+              disabled
+              title="Test mode is paused — review mode only for now"
+              type="button"
+            >
+              <ClipboardList size={16} />
+              Full paper test
+              <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.08em] ${isDark ? 'bg-stone-800 text-stone-400' : 'bg-stone-200 text-stone-500'}`}>Soon</span>
+            </button>
             <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onBrowse(selectedPaperId, selectedSection)} type="button"><Eye size={16} />View opened questions</button>
             {selectedSection !== 'all' && (
               <>
                 <div className={`mt-1 border-t pt-3 text-[0.7rem] font-bold uppercase tracking-[0.16em] ${isDark ? 'border-stone-800 text-stone-500' : 'border-stone-200 text-stone-500'}`}>Section actions</div>
                 <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onLearn(selectedPaperId, selectedSection)} type="button"><BookMarked size={15} />Review section</button>
-                <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onStartTest(selectedPaperId, selectedSection)} type="button"><ClipboardList size={15} />Test section</button>
+                <button
+                  className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${isDark ? 'border-stone-800 bg-stone-950/40 text-stone-500' : 'border-stone-200 bg-stone-100 text-stone-400'} cursor-not-allowed`}
+                  disabled
+                  title="Test mode is paused — review mode only for now"
+                  type="button"
+                >
+                  <ClipboardList size={15} />
+                  Test section
+                  <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.08em] ${isDark ? 'bg-stone-800 text-stone-400' : 'bg-stone-200 text-stone-500'}`}>Soon</span>
+                </button>
               </>
             )}
             <button className={`mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 ${isDark ? 'border-amber-700/70 bg-amber-950/40 text-amber-200 hover:bg-amber-950/60' : 'border-red-200 bg-red-50 text-red-800 hover:bg-red-100'}`} disabled={reviewCount === 0} onClick={onReviewOnly} type="button"><Flag size={15} />Practice review-later ({reviewCount})</button>
@@ -1933,7 +2282,15 @@ function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onT
             {answerRevealed ? 'Answer shown' : 'Show answer'}
           </button>
           <button onClick={() => onToggleReview(question.id)} className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition ${isMarked ? isDark ? 'border-amber-500 bg-amber-950/50 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-800' : isDark ? 'border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-100'}`} type="button"><Flag size={13} /> {isMarked ? 'Marked' : 'Mark for review'}</button>
-          <button onClick={onStartTest} className={`sticky bottom-3 z-20 inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition sm:static ${isDark ? 'bg-amber-500 text-stone-950 hover:bg-amber-400' : 'bg-red-700 text-white hover:bg-red-800'}`} type="button"><ClipboardList size={13} /> Test these</button>
+          <button
+            disabled
+            title="Test mode is paused — review mode only for now"
+            className={`sticky bottom-3 z-20 inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold cursor-not-allowed sm:static ${isDark ? 'bg-stone-800 text-stone-500' : 'bg-stone-200 text-stone-500'}`}
+            type="button"
+          >
+            <ClipboardList size={13} /> Test these
+            <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.08em] ${isDark ? 'bg-stone-900 text-stone-400' : 'bg-white text-stone-500'}`}>Soon</span>
+          </button>
         </div>
       </div>
       <article className={`rounded-2xl border p-5 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/85' : 'border-stone-200 bg-white/90'}`}>
@@ -2081,7 +2438,14 @@ function PaperResults({ answers, elapsedSeconds, isDark, onBack, onRetry, questi
         <h2 className="text-2xl font-bold">{scopeTitle}</h2>
         <p className={`mt-1 text-sm ${isDark ? 'text-emerald-200' : 'text-emerald-800'}`}>{correct.length} of {answered.length} correct · {score}% · {formatTime(elapsedSeconds)}</p>
         <div className="mt-4 flex flex-wrap justify-center gap-2">
-          <button onClick={onRetry} className={`inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold ${isDark ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400' : 'bg-emerald-700 text-white hover:bg-emerald-800'}`} type="button"><RotateCcw size={15} /> Retry</button>
+          <button
+            disabled
+            title="Test mode is paused — review mode only for now"
+            className={`inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold cursor-not-allowed ${isDark ? 'bg-stone-800 text-stone-500' : 'bg-stone-200 text-stone-500'}`}
+            type="button"
+          >
+            <RotateCcw size={15} /> Retry
+          </button>
           <button onClick={onBack} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-sm font-semibold ${isDark ? 'border-emerald-700 bg-emerald-950/40 text-emerald-100' : 'border-emerald-300 bg-white text-emerald-900'}`} type="button"><ArrowLeft size={15} /> Back</button>
         </div>
       </div>
