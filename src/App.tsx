@@ -217,6 +217,7 @@ const JAPANESE_EXACT_TRANSLATIONS: Record<string, string> = {
   'Perfect score. Subarashii!': '満点です。すばらしい！',
   'Play again': 'もう一度',
   'Kanji': '漢字',
+  'Daily': '日常',
   'Papers': '過去問',
   'Trainer': 'トレーナー',
   'Bulk trainer': '一括トレーナー',
@@ -1208,8 +1209,11 @@ export default function App() {
         switchMode('kanji');
       } else if (e.key === '2') {
         e.preventDefault();
-        switchMode('papers');
+        switchMode('trainer');
       } else if (e.key === '3') {
+        e.preventDefault();
+        switchMode('papers');
+      } else if (e.key === '4') {
         e.preventDefault();
         switchMode('draw');
       } else if (e.key.toLowerCase() === 'r' && currentPaperQuestion && (appView === 'paper-learn' || appView === 'paper-test')) {
@@ -1225,12 +1229,11 @@ export default function App() {
   }, [appView, currentPaperQuestion, showShortcuts]);
 
   /* ── Render ── */
-  // Trainer mode is now launched as a deck from the kanji dashboard rather
-  // than as its own top-level tab, so the back button from trainer screens
-  // returns the user to the kanji dashboard.
+  // Daily Expressions ("trainer" internally) is now a top-level tab, so its
+  // back button returns to its own Learn / Practice picker (trainer-setup).
   const dashboardView: AppView = appMode === 'kanji' ? 'dashboard'
     : appMode === 'papers' ? 'paper-dashboard'
-    : appMode === 'trainer' ? 'dashboard'
+    : appMode === 'trainer' ? 'trainer-setup'
     : 'draw-dashboard';
 
   return (
@@ -1519,6 +1522,18 @@ function AppHeader({ appMode, appView, isDark, language, onBackToDashboard, onOp
           </button>
           <button
             className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition sm:h-10 sm:px-4 ${
+              appMode === 'trainer'
+                ? isDark ? 'bg-sky-500 text-stone-950' : 'bg-sky-700 text-white'
+                : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
+            }`}
+            onClick={() => onSwitchMode('trainer')}
+            type="button"
+          >
+            <Dumbbell size={15} />
+            Daily
+          </button>
+          <button
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition sm:h-10 sm:px-4 ${
               appMode === 'papers'
                 ? isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'
                 : isDark ? 'text-stone-300 hover:text-stone-100' : 'text-stone-600 hover:text-stone-900'
@@ -1614,7 +1629,7 @@ function KeyboardShortcutsModal({ appMode, appView, isDark, onClose }: { appMode
     { keyName: '?', action: 'Open shortcuts' },
     { keyName: 'Esc', action: 'Close' },
     { keyName: 'M', action: 'Toggle theme' },
-    { keyName: '1 / 2 / 3', action: 'Switch mode (Kanji / Papers / Draw)' },
+    { keyName: '1 / 2 / 3 / 4', action: 'Switch mode (Kanji / Daily / Papers / Draw)' },
   ];
 
   if (appView === 'paper-learn') {
@@ -1734,8 +1749,11 @@ function Dashboard({ bestTime, dailyExpressionCount, isDark, onLaunchDailyExpres
             );
           })}
 
-          {/* Common Daily Expressions — launches the trainer worksheet inline,
-              styled as a deck card so it lives alongside the kanji decks. */}
+          {/* Common Daily Expressions deck card — disabled in favor of the new
+              top-level "Daily" mode tab. Source preserved for reference; do not
+              delete. To restore, re-render this button and re-enable the
+              onLaunchDailyExpressions prop wiring. */}
+          {/*
           <button
             className={`group relative overflow-hidden rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 ${
               isDark
@@ -1769,6 +1787,7 @@ function Dashboard({ bestTime, dailyExpressionCount, isDark, onLaunchDailyExpres
             </div>
             <p className={`relative mt-5 text-2xl font-semibold tracking-normal ${isDark ? 'text-stone-100' : 'text-stone-900'}`}>こんにちは · ありがとう · さようなら</p>
           </button>
+          */}
         </div>
       </div>
       <aside className={`rounded-2xl border p-4 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900' : 'border-stone-200 bg-white'}`}>
@@ -2059,6 +2078,9 @@ function PaperPracticeDashboard({
 
           <div className="mt-5 grid gap-2">
             <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 ${isDark ? 'bg-gradient-to-r from-amber-400 to-amber-500 text-stone-950 hover:from-amber-300 hover:to-amber-400' : 'bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-500 hover:to-red-600'}`} onClick={() => onLearn(selectedPaperId, 'all')} type="button"><BookOpen size={16} />Full paper review</button>
+            {/* Full paper test — hidden until the test flow is ready. No "Soon"
+                hints. Source preserved; do not delete. */}
+            {/*
             <button
               className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${isDark ? 'border-stone-800 bg-stone-950/40 text-stone-500' : 'border-stone-200 bg-stone-100 text-stone-400'} cursor-not-allowed`}
               disabled
@@ -2069,11 +2091,15 @@ function PaperPracticeDashboard({
               Full paper test
               <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.08em] ${isDark ? 'bg-stone-800 text-stone-400' : 'bg-stone-200 text-stone-500'}`}>Soon</span>
             </button>
+            */}
             <button className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onBrowse(selectedPaperId, selectedSection)} type="button"><Eye size={16} />View opened questions</button>
             {selectedSection !== 'all' && (
               <>
                 <div className={`mt-1 border-t pt-3 text-[0.7rem] font-bold uppercase tracking-[0.16em] ${isDark ? 'border-stone-800 text-stone-500' : 'border-stone-200 text-stone-500'}`}>Section actions</div>
                 <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 ${isDark ? 'border-stone-700 bg-stone-950/60 text-stone-100 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-950 hover:bg-stone-100'}`} onClick={() => onLearn(selectedPaperId, selectedSection)} type="button"><BookMarked size={15} />Review section</button>
+                {/* Test section — hidden until the test flow is ready. Source
+                    preserved; do not delete. */}
+                {/*
                 <button
                   className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${isDark ? 'border-stone-800 bg-stone-950/40 text-stone-500' : 'border-stone-200 bg-stone-100 text-stone-400'} cursor-not-allowed`}
                   disabled
@@ -2084,6 +2110,7 @@ function PaperPracticeDashboard({
                   Test section
                   <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.08em] ${isDark ? 'bg-stone-800 text-stone-400' : 'bg-stone-200 text-stone-500'}`}>Soon</span>
                 </button>
+                */}
               </>
             )}
             <button className={`mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 ${isDark ? 'border-amber-700/70 bg-amber-950/40 text-amber-200 hover:bg-amber-950/60' : 'border-red-200 bg-red-50 text-red-800 hover:bg-red-100'}`} disabled={reviewCount === 0} onClick={onReviewOnly} type="button"><Flag size={15} />Practice review-later ({reviewCount})</button>
@@ -2282,6 +2309,9 @@ function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onT
             {answerRevealed ? 'Answer shown' : 'Show answer'}
           </button>
           <button onClick={() => onToggleReview(question.id)} className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition ${isMarked ? isDark ? 'border-amber-500 bg-amber-950/50 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-800' : isDark ? 'border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-100'}`} type="button"><Flag size={13} /> {isMarked ? 'Marked' : 'Mark for review'}</button>
+          {/* Test these — hidden until the test flow is ready. Source preserved;
+              do not delete. */}
+          {/*
           <button
             disabled
             title="Test mode is paused — review mode only for now"
@@ -2291,6 +2321,7 @@ function PaperLearnMode({ currentIndex, isDark, onBack, onMove, onStartTest, onT
             <ClipboardList size={13} /> Test these
             <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.08em] ${isDark ? 'bg-stone-900 text-stone-400' : 'bg-white text-stone-500'}`}>Soon</span>
           </button>
+          */}
         </div>
       </div>
       <article className={`rounded-2xl border p-5 shadow-sm ${isDark ? 'border-stone-700 bg-stone-900/85' : 'border-stone-200 bg-white/90'}`}>

@@ -115,18 +115,12 @@ export default function Setup({
       <div className={`rounded-2xl border p-5 shadow-sm ${panel}`}>
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.2em] ${isDark ? 'text-amber-300' : 'text-red-700'}`}>Bulk trainer</p>
-            <h2 className={`mt-1 text-2xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Build a matching worksheet</h2>
+            <p className={`text-[0.7rem] font-bold uppercase tracking-[0.2em] ${isDark ? 'text-sky-300' : 'text-sky-700'}`}>Daily expressions</p>
+            <h2 className={`mt-1 text-2xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Learn first, then practice</h2>
             <p className={`mt-1 max-w-2xl text-sm leading-6 ${muted}`}>
-              Paste pairs, use the daily expressions, or seed from an MCQ section.
+              {dailyExpressionCount} bundled everyday Japanese phrases. Study the pairs, then drill them as a shuffled match worksheet.
             </p>
           </div>
-          {lastPairs.length > 1 && (
-            <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold ${secondaryButton}`} onClick={loadLastPairs} type="button">
-              <ClipboardList size={16} />
-              Load last set
-            </button>
-          )}
         </div>
 
         <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -137,22 +131,33 @@ export default function Setup({
             <h3 className={`text-lg font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Study daily expressions</h3>
             <p className={`mt-1 text-sm ${muted}`}>{dailyExpressionCount} bundled sentence pairs.</p>
           </button>
-          <button className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 ${isDark ? 'border-amber-500 bg-amber-950/50 text-amber-100' : 'border-red-700 bg-red-50 text-red-900'}`} onClick={onStartPractice} type="button">
-            <div className={`mb-3 grid h-11 w-11 place-items-center rounded-xl ${isDark ? 'bg-amber-500 text-stone-950' : 'bg-red-700 text-white'}`}>
+          <button className={`rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 ${secondaryButton}`} onClick={onStartPractice} type="button">
+            <div className={`mb-3 grid h-11 w-11 place-items-center rounded-xl ${isDark ? 'bg-stone-800 text-sky-300' : 'bg-stone-100 text-sky-700'}`}>
               <Dumbbell size={22} />
             </div>
-            <h3 className="text-lg font-bold">Practice daily expressions</h3>
-            <p className="mt-1 text-sm opacity-80">Start a shuffled worksheet immediately.</p>
+            <h3 className={`text-lg font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Practice daily expressions</h3>
+            <p className={`mt-1 text-sm ${muted}`}>Start a shuffled worksheet immediately.</p>
           </button>
         </div>
       </div>
 
+      {/* Bulk Input / Custom Pairs / Seed from Papers — disabled because the
+          bundled daily expressions already cover this flow. Source preserved
+          for reference; do not delete. To restore, uncomment the block below
+          and reintroduce the `Start practice` CTA. */}
+      {/*
       <div className={`rounded-2xl border p-5 shadow-sm ${panel}`}>
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h3 className={`text-xl font-bold ${isDark ? 'text-stone-50' : 'text-stone-950'}`}>Custom pairs</h3>
             <p className={`mt-1 text-sm ${muted}`}>Supported separators: dash, tab, or comma.</p>
           </div>
+          {lastPairs.length > 1 && (
+            <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold ${secondaryButton}`} onClick={loadLastPairs} type="button">
+              <ClipboardList size={16} />
+              Load last set
+            </button>
+          )}
           <div className={`inline-flex rounded-full border p-1 ${isDark ? 'border-stone-700 bg-stone-950' : 'border-stone-200 bg-stone-50'}`}>
             {(['bulk', 'simple'] as const).map((mode) => (
               <button
@@ -229,6 +234,7 @@ export default function Setup({
           Start practice
         </button>
       </div>
+      */}
     </section>
   );
 }
