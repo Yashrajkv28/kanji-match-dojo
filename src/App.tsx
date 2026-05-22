@@ -839,6 +839,11 @@ export default function App() {
 
   useEffect(() => {
     window.localStorage.setItem(THEME_KEY, theme);
+    // Keep the page (html/body) background in sync with the theme so an
+    // overscroll/rubber-band bounce never reveals a mismatched border.
+    const pageBg = theme === 'dark' ? '#12110f' : '#f6f4ef';
+    document.documentElement.style.background = pageBg;
+    document.body.style.background = pageBg;
   }, [theme]);
 
   useEffect(() => {

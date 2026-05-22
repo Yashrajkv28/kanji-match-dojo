@@ -8,11 +8,11 @@ body,
 
 html {
   background: #f6f4ef;
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
 }
 
 body {
   margin: 0;
   background: #f6f4ef;
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
 }
